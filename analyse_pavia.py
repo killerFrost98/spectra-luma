@@ -115,8 +115,8 @@ def plot_mean_spectral_signatures(data_cube, gt):
     plt.show()
 
 def main():
-    corrected_file = '/Users/phani/Desktop/AI/indian-pines/dataset/PaviaU.mat'
-    gt_file = '/Users/phani/Desktop/AI/indian-pines/dataset/PaviaU_gt.mat'
+    corrected_file = '/Users/phani/Desktop/AI/spectra-luma/dataset/PaviaU.mat'
+    gt_file = '/Users/phani/Desktop/AI/spectra-luma/dataset/PaviaU_gt.mat'
     
     # Load the data
     data_cube, gt = load_data(corrected_file, gt_file)

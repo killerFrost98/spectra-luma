@@ -7,12 +7,12 @@ from torch.utils.data import TensorDataset, DataLoader
 
 
 # Load Indian Pines data from .mat files
-ip_data = scipy.io.loadmat('/Users/phani/Desktop/AI/indian-pines/dataset/Indian_pines_corrected.mat')['indian_pines_corrected']  # shape: (145, 145, n_bands)
-ip_labels = scipy.io.loadmat('/Users/phani/Desktop/AI/indian-pines/dataset/Indian_pines_gt.mat')['indian_pines_gt']              # shape: (145, 145)
+ip_data = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/Indian_pines_corrected.mat')['indian_pines_corrected']  # shape: (145, 145, n_bands)
+ip_labels = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/Indian_pines_gt.mat')['indian_pines_gt']              # shape: (145, 145)
 
 # Load Pavia University data from .mat files
-pu_data = scipy.io.loadmat('/Users/phani/Desktop/AI/indian-pines/dataset/PaviaU.mat')['paviaU']       # shape: (610, 610, n_bands)
-pu_labels = scipy.io.loadmat('/Users/phani/Desktop/AI/indian-pines/dataset/PaviaU_gt.mat')['paviaU_gt']  # shape: (610, 610)
+pu_data = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/PaviaU.mat')['paviaU']       # shape: (610, 610, n_bands)
+pu_labels = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/PaviaU_gt.mat')['paviaU_gt']  # shape: (610, 610)
 
 # Preprocessing function: normalize and flatten HSI data
 def preprocess_hsi(data_cube, label_map):
@@ -146,7 +146,7 @@ dummy_input = torch.randn(1, num_bands, requires_grad=True)
 torch.onnx.export(
     model,                      
     dummy_input,                
-    "/Users/phani/Desktop/AI/indian-pines/model/SpectralTransformer.onnx",
+    "/Users/phani/Desktop/AI/spectra-luma/model/SpectralTransformer.onnx",
     export_params=True,         
     opset_version=13,           # Updated version
     do_constant_folding=True,   
@@ -163,6 +163,6 @@ inference_params = {
 }
 
 # Save the dictionary to a file using torch.save (you could also use pickle or JSON if you prefer)
-torch.save(inference_params, "/Users/phani/Desktop/AI/indian-pines/model/inference_params.pth")
+torch.save(inference_params, "/Users/phani/Desktop/AI/spectra-luma/model/inference_params.pth")
 
 print("Model and inference parameters have been successfully saved.")
