@@ -23,12 +23,15 @@ CLASS_NAMES = {
 }
 
 def main():
+    global CLASS_NAMES
     print("[INFO] Loading inference parameters...")
     try:
         inference_params = torch.load("/Users/phani/Desktop/AI/spectra-luma/model/inference_params.pth", map_location=torch.device('cpu'))
         band_min = inference_params['band_min']  # numpy array of shape (num_bands,)
         band_max = inference_params['band_max']  # numpy array of shape (num_bands,)
         num_bands = band_min.shape[0]
+        if 'CLASS_NAMES' in inference_params:
+            CLASS_NAMES = inference_params['CLASS_NAMES']
         print("[SUCCESS] Loaded inference parameters successfully!")
     except Exception as e:
         print(f"[ERROR] Failed to load inference parameters: {e}")

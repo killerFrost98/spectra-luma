@@ -4,7 +4,26 @@ from sklearn.model_selection import train_test_split
 import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
+import json
 
+CLASS_NAMES = {
+    0: "Alfalfa",
+    1: "Corn-notill",
+    2: "Corn-mintill",
+    3: "Corn",
+    4: "Grass-pasture",
+    5: "Grass-trees",
+    6: "Grass-pasture-mowed",
+    7: "Hay-windrowed",
+    8: "Oats",
+    9: "Soybean-notill",
+    10: "Soybean-mintill",
+    11: "Soybean-clean",
+    12: "Wheat",
+    13: "Woods",
+    14: "Buildings-Grass-Trees-Drives",
+    15: "Stone-Steel-Towers"
+}
 
 # Load Indian Pines data from .mat files
 ip_data = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/Indian_pines_corrected.mat')['indian_pines_corrected']  # shape: (145, 145, n_bands)
@@ -159,9 +178,26 @@ inference_params = {
     'model_state_dict': model.state_dict(),
     'band_min': band_min,  # numpy array of shape (num_bands,)
     'band_max': band_max,  # numpy array of shape (num_bands,)
+    'CLASS_NAMES': CLASS_NAMES
 }
 
 # Save the dictionary to a file using torch.save (you could also use pickle or JSON if you prefer)
 torch.save(inference_params, "/Users/phani/Desktop/AI/spectra-luma/model/inference_params.pth")
+
+# Load the PyTorch inference parameters
+inference_params = torch.load("/Users/phani/Desktop/AI/spectra-luma/model/inference_params.pth", map_location=torch.device('cpu'))
+
+# Convert tensors/arrays to lists if necessary
+band_min = inference_params['band_min']
+band_max = inference_params['band_max']
+if hasattr(band_min, 'tolist'):
+    band_min = band_min.tolist()
+if hasattr(band_max, 'tolist'):
+    band_max = band_max.tolist()
+
+# Save the parameters to a JSON file
+params = {"band_min": band_min, "band_max": band_max, "CLASS_NAMES": CLASS_NAMES}
+with open("/Users/phani/Desktop/AI/spectra-luma/model/inference_params.json", "w") as f:
+    json.dump(params, f)
 
 print("Model and inference parameters have been successfully saved.")

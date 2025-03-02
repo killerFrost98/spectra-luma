@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Spectral Transformer Inference</title>
+    <!-- Import ONNX Runtime Web from a local relative path -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        textarea {
+            width: 100%;
+        }
+
+        pre {
+            background: #f4f4f4;
+            padding: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Spectral Transformer Inference</h1>
+    <p>Enter spectral data (comma-separated):</p>
+    <textarea id="spectralInput" rows="8" placeholder="e.g., 2592.000000, 4373.000000, ..."></textarea>
+    <br>
+    <button id="runInferenceButton">Run Inference</button>
+    <h2>Output</h2>
+    <pre id="output"></pre>
+
+    <script>
+        // Global variables for the ONNX model session and inference parameters
+        let session;
+        let inferenceParams;
+
+        // Declare CLASS_NAMES as a mutable variable.
+        let CLASS_NAMES = {};
+
+        // Load the ONNX model when the page loads
+        async function loadModel() {
+            const outputElem = document.getElementById("output");
+            try {
+                const modelUrl = "../model/SpectralTransformer.onnx"; // Ensure this path is correct.
+                session = await ort.InferenceSession.create(modelUrl);
+                outputElem.textContent += "[SUCCESS] ONNX model loaded successfully.\n";
+            } catch (err) {
+                outputElem.textContent += "[ERROR] Failed to load ONNX model: " + err + "\n";
+            }
+        }
+
+        // Load inference parameters from a JSON file (including CLASS_NAMES)
+        async function loadInferenceParameters() {
+            const outputElem = document.getElementById("output");
+            try {
+                const response = await fetch("../model/inference_params.json");
+                if (!response.ok) {
+                    throw new Error("HTTP error " + response.status);
+                }
+                inferenceParams = await response.json();
+                outputElem.textContent += "[SUCCESS] Loaded inference parameters successfully.\n";
+
+                // Load CLASS_NAMES from inference_params.json if available; otherwise use a default.
+                if (inferenceParams.class_names) {
+                    CLASS_NAMES = inferenceParams.class_names;
+                    outputElem.textContent += "[SUCCESS] Loaded CLASS_NAMES from inference_params.json.\n";
+                } else {
+                    // Optional: fallback default mapping
+                    CLASS_NAMES = {
+                        0: "Alfalfa",
+                        1: "Corn-notill",
+                        2: "Corn-mintill",
+                        3: "Corn",
+                        4: "Grass-pasture",
+                        5: "Grass-trees",
+                        6: "Grass-pasture-mowed",
+                        7: "Hay-windrowed",
+                        8: "Oats",
+                        9: "Soybean-notill",
+                        10: "Soybean-mintill",
+                        11: "Soybean-clean",
+                        12: "Wheat",
+                        13: "Woods",
+                        14: "Buildings-Grass-Trees-Drives",
+                        15: "Stone-Steel-Towers"
+                    };
+                    outputElem.textContent +=
+                        "[INFO] CLASS_NAMES not found in inference_params.json, using default mapping.\n";
+                }
+            } catch (err) {
+                outputElem.textContent += "[ERROR] Failed to load inference parameters: " + err + "\n";
+            }
+        }
+
+        // Run inference using the user-provided spectral data and loaded inference parameters
+        async function runInference() {
+            const outputElem = document.getElementById("output");
+            outputElem.textContent = ""; // Clear previous output
+
+            // Check if inference parameters have been loaded
+            if (!inferenceParams || !inferenceParams.band_min || !inferenceParams.band_max) {
+                outputElem.textContent += "[ERROR] Inference parameters not loaded.\n";
+                return;
+            }
+            outputElem.textContent += "[INFO] Inference parameters loaded.\n";
+
+            // Parse user input
+            const inputText = document.getElementById("spectralInput").value;
+            let spectralData;
+            try {
+                spectralData = inputText.split(",").map(x => parseFloat(x.trim()));
+                if (spectralData.some(isNaN)) {
+                    throw new Error("Invalid input. Please enter numerical values separated by commas.");
+                }
+                outputElem.textContent += "[INFO] User input parsed successfully.\n";
+            } catch (err) {
+                outputElem.textContent += "[ERROR] " + err.message + "\n";
+                return;
+            }
+
+            const numBands = spectralData.length;
+            const bandMin = inferenceParams.band_min;
+            const bandMax = inferenceParams.band_max;
+
+            // Validate input length against the expected number of bands
+            if (bandMin.length !== numBands || bandMax.length !== numBands) {
+                outputElem.textContent +=
+                    `[ERROR] Input length (${numBands}) does not match expected number of bands (${bandMin.length}).\n`;
+                return;
+            }
+
+            // Normalize input data: (value - min) / (max - min + 1e-6)
+            outputElem.textContent += "[INFO] Normalizing input data...\n";
+            const normalizedData = new Float32Array(numBands);
+            for (let i = 0; i < numBands; i++) {
+                normalizedData[i] = (spectralData[i] - bandMin[i]) / ((bandMax[i] - bandMin[i]) + 1e-6);
+            }
+            outputElem.textContent += "[SUCCESS] Normalized input data.\n";
+
+            // Reshape input data for the model: [1, numBands]
+            const inputTensor = new ort.Tensor("float32", normalizedData, [1, numBands]);
+            outputElem.textContent += `[INFO] Input data reshaped to: [1, ${numBands}]\n`;
+
+            // Run inference
+            outputElem.textContent += "[INFO] Running inference...\n";
+            try {
+                const feeds = {};
+                // Get the model input name dynamically
+                const inputNames = session.inputNames;
+                feeds[inputNames[0]] = inputTensor;
+                const results = await session.run(feeds);
+                const outputName = session.outputNames[0];
+                const logits = results[outputName].data;
+                outputElem.textContent += "[SUCCESS] Inference completed successfully.\n";
+
+                // Compute softmax probabilities
+                const logitsArray = Array.from(logits);
+                const maxLogit = Math.max(...logitsArray);
+                const expLogits = logitsArray.map(x => Math.exp(x - maxLogit));
+                const sumExp = expLogits.reduce((a, b) => a + b, 0);
+                const probabilities = expLogits.map(x => x / sumExp);
+
+                // Get top 3 predictions
+                let indices = probabilities.map((p, i) => i);
+                indices.sort((a, b) => probabilities[b] - probabilities[a]);
+                const top3Indices = indices.slice(0, 3);
+
+                outputElem.textContent += "[INFO] Top 3 predictions:\n";
+                top3Indices.forEach(idx => {
+                    const label = CLASS_NAMES[idx] || "Unknown";
+                    const confidence = probabilities[idx] * 100;
+                    outputElem.textContent += `${label}: ${confidence.toFixed(2)}%\n`;
+                });
+            } catch (err) {
+                outputElem.textContent += "[ERROR] Model inference failed: " + err + "\n";
+            }
+        }
+
+        // Add event listener for the inference button
+        document.getElementById("runInferenceButton").addEventListener("click", runInference);
+
+        // Load the model and inference parameters as soon as the page loads
+        loadModel();
+        loadInferenceParameters();
+    </script>
+</body>
+
+</html>
