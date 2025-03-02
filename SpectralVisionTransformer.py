@@ -148,7 +148,7 @@ torch.onnx.export(
     dummy_input,                
     "/Users/phani/Desktop/AI/spectra-luma/model/SpectralTransformer.onnx",
     export_params=True,         
-    opset_version=13,           # Updated version
+    opset_version=16,           # Updated version
     do_constant_folding=True,   
     input_names=['input'],      
     output_names=['output'],    
@@ -159,7 +159,6 @@ inference_params = {
     'model_state_dict': model.state_dict(),
     'band_min': band_min,  # numpy array of shape (num_bands,)
     'band_max': band_max,  # numpy array of shape (num_bands,)
-    # Include any other parameters needed for inference here.
 }
 
 # Save the dictionary to a file using torch.save (you could also use pickle or JSON if you prefer)
