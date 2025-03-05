@@ -7,6 +7,7 @@ from torch.utils.data import TensorDataset, DataLoader
 import json
 from collections import Counter
 
+# Set device (MPS if available, else CUDA/CPU)
 device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Class names for Indian Pines dataset (0-based after background removal)
@@ -29,27 +30,32 @@ CLASS_NAMES = {
     15: "Stone-Steel-Towers"
 }
 
+# Early stopping settings
+min_accuracy = 0.50
+improvement_threshold = 0.01
+patience = 3
+epochs_without_improvement = 0
+best_accuracy = 0.0
+max_epochs = 100
+
 # Load Indian Pines data from .mat files
-ip_data = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/Indian_pines_corrected.mat')['indian_pines_corrected']  # shape: (145, 145, n_bands)
-ip_labels = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/Indian_pines_gt.mat')['indian_pines_gt']              # shape: (145, 145)
+ip_data = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/Indian_pines_corrected.mat')['indian_pines_corrected']
+ip_labels = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/Indian_pines_gt.mat')['indian_pines_gt']
 
 # Load Pavia University data from .mat files
-pu_data = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/PaviaU.mat')['paviaU']       # shape: (610, 610, n_bands)
-pu_labels = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/PaviaU_gt.mat')['paviaU_gt']  # shape: (610, 610)
+pu_data = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/PaviaU.mat')['paviaU']
+pu_labels = scipy.io.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/PaviaU_gt.mat')['paviaU_gt']
 
-# Preprocessing function without normalization (since normalization will be done in the model)
+# Preprocessing (no normalization here; model will handle it)
 def preprocess_hsi(data_cube, label_map):
     H, W, B = data_cube.shape
-    data_cube = data_cube.astype(np.float32)
-    data_cube = data_cube.reshape(-1, B)
+    data_cube = data_cube.astype(np.float32).reshape(-1, B)
     labels = label_map.reshape(-1)
-    # Remove background pixels (assumed label 0)
-    mask = labels > 0
+    mask = labels > 0  # remove background pixels
     X = data_cube[mask]
-    y = labels[mask] - 1  # Convert to 0-based labels
+    y = labels[mask] - 1  # convert to 0-based labels
     return X, y
 
-# Apply preprocessing
 X_ip, y_ip = preprocess_hsi(ip_data, ip_labels)
 X_pu, y_pu = preprocess_hsi(pu_data, pu_labels)
 
@@ -68,97 +74,112 @@ def print_class_distribution(y, dataset_name):
 print_class_distribution(y_ip, "Indian Pines (Original)")
 print_class_distribution(y_pu, "Pavia University (Original)")
 
-# Split data into training and testing sets (using stratification)
-X_ip_train, X_ip_test, y_ip_train, y_ip_test = train_test_split(
-    X_ip, y_ip, test_size=0.3, stratify=y_ip, random_state=42
-)
-X_pu_train, X_pu_test, y_pu_train, y_pu_test = train_test_split(
-    X_pu, y_pu, test_size=0.3, stratify=y_pu, random_state=42
-)
+# Split data into training and testing sets
+X_ip_train, X_ip_test, y_ip_train, y_ip_test = train_test_split(X_ip, y_ip, test_size=0.3, stratify=y_ip, random_state=42)
+X_pu_train, X_pu_test, y_pu_train, y_pu_test = train_test_split(X_pu, y_pu, test_size=0.3, stratify=y_pu, random_state=42)
 
 print_class_distribution(y_ip_train, "Indian Pines (Train)")
 print_class_distribution(y_ip_test, "Indian Pines (Test)")
 print_class_distribution(y_pu_train, "Pavia University (Train)")
 print_class_distribution(y_pu_test, "Pavia University (Test)")
 
-# Compute per-band min and max from the training data (for normalization)
+# Compute per-band min and max from the training data for normalization inside the model
 band_min = X_ip_train.min(axis=0)
 band_max = X_ip_train.max(axis=0)
-
 print("Band Min:", band_min)
 print("Band Max:", band_max)
 
-# Define a function to compute the static sinusoidal positional encoding
+# Compute static sinusoidal positional encoding
 def get_static_positional_encoding(n_bands, d_model):
-    """
-    Computes the sinusoidal positional encoding table.
-    
-    Args:
-        n_bands (int): Number of positions (bands) to generate encodings for.
-        d_model (int): Dimensionality of the model.
-    
-    Returns:
-        torch.Tensor: A tensor of shape (n_bands, d_model) containing the positional encodings.
-    """
-    position = np.arange(n_bands)[:, np.newaxis]  # (n_bands, 1)
+    position = np.arange(n_bands)[:, np.newaxis]
     div_term = np.exp(np.arange(0, d_model, 2) * -(np.log(10000.0) / d_model))
     pe = np.zeros((n_bands, d_model))
     pe[:, 0::2] = np.sin(position * div_term)
     pe[:, 1::2] = np.cos(position * div_term)
     return torch.tensor(pe, dtype=torch.float32)
 
-# Modified SpectralTransformer model using static positional encoding
+# Custom transformer encoder layer that returns attention weights
+class TransformerEncoderLayerWithAttn(nn.Module):
+    def __init__(self, d_model, nhead, dim_feedforward=128, dropout=0.1):
+        super(TransformerEncoderLayerWithAttn, self).__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.activation = nn.ReLU()
+
+    def forward(self, src):
+        # src: (batch, seq_len, d_model)
+        attn_output, attn_weights = self.self_attn(src, src, src, need_weights=True)
+        src = src + self.dropout1(attn_output)
+        src = self.norm1(src)
+        src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
+        src = src + self.dropout2(src2)
+        src = self.norm2(src)
+        return src, attn_weights
+
+# Modified SpectralTransformer model using custom transformer layers
 class SpectralTransformer(nn.Module):
     def __init__(self, num_bands, num_classes, band_min, band_max, d_model=64, nhead=8, num_layers=2, dim_feedforward=128):
         super(SpectralTransformer, self).__init__()
-        
-        # Register the normalization parameters as buffers (they won't be trainable)
+        # Register normalization parameters as buffers
         self.register_buffer("band_min", torch.tensor(band_min, dtype=torch.float32))
         self.register_buffer("band_max", torch.tensor(band_max, dtype=torch.float32))
-        self.eps = 1e-8  # small epsilon to avoid division by zero
-        
-        # 1. Linear projection: from a scalar spectral value to d_model
+        self.eps = 1e-8
+
+        # 1. Linear projection: scalar -> d_model
         self.value_embed = nn.Linear(1, d_model)
         
         # 2. Static positional encoding for 200 bands
         static_pe = get_static_positional_encoding(200, d_model)
-        # Adjust the positional encoding to match num_bands if necessary
         if num_bands < 200:
             static_pe = static_pe[:num_bands, :]
         elif num_bands > 200:
-            static_pe = static_pe[:num_bands, :]  # simple truncation (or consider interpolation)
-        # Register as a buffer so it remains fixed
+            static_pe = static_pe[:num_bands, :]  # simple truncation (interpolation can be used)
         self.register_buffer("pos_embed", static_pe.unsqueeze(0))  # shape: (1, num_bands, d_model)
         
-        # 3. Layer normalization for the embedded spectral values
+        # 3. Layer normalization for embedded spectral values
         self.input_norm = nn.LayerNorm(d_model)
         
-        # 4. Transformer encoder layers
-        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead,
-                                                   dim_feedforward=dim_feedforward, batch_first=True)
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        # 4. Custom transformer encoder layers (returning attention weights)
+        self.encoder_layers = nn.ModuleList([
+            TransformerEncoderLayerWithAttn(d_model, nhead, dim_feedforward) for _ in range(num_layers)
+        ])
         
-        # 5. Classification head mapping aggregated output to class logits
+        # 5. Classification head
         self.classifier = nn.Linear(d_model, num_classes)
     
-    def forward(self, x, return_probs=False):
-        # x: (batch_size, num_bands)
-        # Normalize each spectral band using stored min and max
-        x = (x - self.band_min) / (self.band_max - self.band_min + self.eps)
-        
+    def forward(self, x, return_probs=False, return_attention=False):
+        band_min = self.band_min.to(x.device)
+        band_max = self.band_max.to(x.device)
+        x = (x - band_min) / (band_max - band_min + self.eps)
         batch_size, seq_len = x.shape
-        # Linear projection: expand dimensions to (batch, seq_len, 1)
-        x_emb = self.value_embed(x.unsqueeze(-1))
-        # Add static positional encoding (make sure to slice if seq_len is less than pos_embed's size)
+        
+        # Linear projection and add positional encoding
+        x_emb = self.value_embed(x.unsqueeze(-1))  # (batch, seq_len, d_model)
         x_emb = x_emb + self.pos_embed[:, :seq_len, :]
-        # Apply layer normalization
         x_emb = self.input_norm(x_emb)
-        # Pass through transformer encoder layers
-        x_enc = self.transformer(x_emb)
-        # Aggregate sequence outputs (mean pooling)
-        seq_avg = x_enc.mean(dim=1)
-        # Classification head producing logits
+        
+        attention_weights_all = []
+        for layer in self.encoder_layers:
+            x_emb, attn_weights = layer(x_emb)
+            attention_weights_all.append(attn_weights)
+        
+        # Mean pooling over the sequence dimension
+        seq_avg = x_emb.mean(dim=1)
         logits = self.classifier(seq_avg)
+        
+        if return_attention:
+            # Stack attention weights: shape (num_layers, batch, num_heads, seq_len, seq_len)
+            attn_stack = torch.stack(attention_weights_all, dim=0)
+            if return_probs:
+                return torch.softmax(logits, dim=1), attn_stack
+            return logits, attn_stack
+        
         if return_probs:
             return torch.softmax(logits, dim=1)
         return logits
@@ -171,10 +192,9 @@ model = SpectralTransformer(num_bands=num_bands, num_classes=num_classes, band_m
 if torch.backends.mps.is_available():
     print("Using MPS for model training.")
     model.to(device)
-
 print(model)
 
-# Prepare PyTorch datasets and dataloaders for training and testing (using Indian Pines)
+# Prepare datasets and dataloaders
 X_train_tensor = torch.from_numpy(X_ip_train).float().to(device)
 y_train_tensor = torch.from_numpy(y_ip_train).long().to(device)
 X_test_tensor  = torch.from_numpy(X_ip_test).float().to(device)
@@ -185,19 +205,11 @@ test_dataset  = TensorDataset(X_test_tensor, y_test_tensor)
 train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 test_loader  = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
-# Update loss function: Use CrossEntropyLoss
+# Loss and optimizer
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-# Early stopping settings
-min_accuracy = 0.85  # stop only after reaching at least 85% test accuracy
-improvement_threshold = 0.01  # require at least 1% improvement in test accuracy
-patience = 3                  # stop if no improvement for 3 consecutive epochs
-epochs_without_improvement = 0
-best_accuracy = 0.0
-max_epochs = 100
-
-# Training loop with early stopping and over/underfitting checks
+# Training loop
 epoch = 0
 while epoch < max_epochs:
     epoch += 1
@@ -205,7 +217,6 @@ while epoch < max_epochs:
     total_loss = 0.0
     for batch_X, batch_y in train_loader:
         optimizer.zero_grad()
-        # Forward pass returns log probabilities by default
         outputs = model(batch_X)
         loss = criterion(outputs, batch_y)
         loss.backward()
@@ -213,19 +224,18 @@ while epoch < max_epochs:
         total_loss += loss.item()
     avg_loss = total_loss / len(train_loader)
     
-    # Evaluation on test set
+    # Evaluate on test set
     model.eval()
     correct_test = 0
     total_test = 0
     with torch.no_grad():
         for batch_X, batch_y in test_loader:
-            # For prediction, argmax over log probabilities is equivalent to argmax over probabilities
             preds = model(batch_X).argmax(dim=1)
             correct_test += (preds == batch_y).sum().item()
             total_test += batch_y.size(0)
     test_accuracy = correct_test / total_test
 
-    # Evaluation on training set
+    # Evaluate on training set
     correct_train = 0
     total_train = 0
     with torch.no_grad():
@@ -235,10 +245,10 @@ while epoch < max_epochs:
             total_train += batch_y.size(0)
     train_accuracy = correct_train / total_train
     
-    print(f"Epoch {epoch}: Avg Training Loss = {avg_loss:.4f}, Train Accuracy = {train_accuracy*100:.2f}%, Test Accuracy = {test_accuracy*100:.2f}%")
+    print(f"Epoch {epoch}: Avg Loss = {avg_loss:.4f}, Train Acc = {train_accuracy*100:.2f}%, Test Acc = {test_accuracy*100:.2f}%")
     
     if train_accuracy - test_accuracy > 0.10:
-        print("Warning: Overfitting detected! Training accuracy is significantly higher than test accuracy.")
+        print("Warning: Overfitting detected!")
     
     if test_accuracy > best_accuracy + improvement_threshold:
         best_accuracy = test_accuracy
@@ -251,12 +261,11 @@ while epoch < max_epochs:
         print("Stopping training early due to insufficient improvement.")
         break
 
-# Final evaluation on the full test set using batches
+# Final evaluation on test set
 model.eval()
 all_preds = []
 with torch.no_grad():
     for batch_X, _ in test_loader:
-        # Here, we return probabilities for clarity
         batch_probs = model(batch_X, return_probs=True)
         all_preds.append(batch_probs)
 probs = torch.cat(all_preds, dim=0)
@@ -264,21 +273,23 @@ preds = probs.argmax(dim=1)
 final_test_accuracy = (preds.cpu() == y_test_tensor.cpu()).float().mean().item()
 print(f"Final Test Accuracy: {final_test_accuracy*100:.2f}%")
 
-# Export the model to ONNX format (the exported model outputs log probabilities; apply softmax as needed)
-dummy_input = torch.randn(1, num_bands, requires_grad=True).to(device)
-dummy_input = dummy_input.to("cpu")
+# Export the model to ONNX with attention outputs.
+dummy_input = torch.randn(1, num_bands, requires_grad=True).cpu()
+model.cpu()  # Ensure model is on CPU
+model.eval() # Set to evaluation mode if not already
 torch.onnx.export(
     model,
-    dummy_input,
+    (dummy_input, False, True),  # Now the model returns two outputs
     "/Users/phani/Desktop/AI/spectra-luma/model/SpectralTransformer.onnx",
     export_params=True,
     opset_version=16,
     do_constant_folding=True,
     input_names=['input'],
-    output_names=['output']
+    output_names=['logits', 'attentions'],
+    dynamic_axes={'input': {0: 'batch_size'}, 'logits': {0: 'batch_size'}, 'attentions': {1: 'batch_size'}}
 )
 
-# Save inference parameters including the CLASS_NAMES mapping
+# Save inference parameters (for restoring normalization and class mapping)
 inference_params = {
     'model_state_dict': model.state_dict(),
     'band_min': band_min.tolist(),
