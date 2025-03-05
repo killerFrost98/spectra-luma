@@ -25,26 +25,28 @@ CLASS_NAMES = {
     15: "Stone-Steel-Towers"
 }
 
-# Create a mask to select only valid pixels (non-background: label > 0)
-mask = ip_labels > 0
-valid_indices = np.argwhere(mask)
-
-# Set seed for reproducibility and randomly select 5 valid pixels
+# Set seed for reproducibility
 np.random.seed(42)
-sample_indices = valid_indices[np.random.choice(valid_indices.shape[0], 5, replace=False)]
 
-# Print formatted output for each selected pixel
-for idx in sample_indices:
-    i, j = idx
+# Loop over each class and select one random valid pixel
+for class_idx, class_name in CLASS_NAMES.items():
+    # Ground truth labels are 1-indexed; use class_idx+1 for the current class
+    class_mask = (ip_labels == (class_idx + 1))
+    valid_indices = np.argwhere(class_mask)
+    
+    if valid_indices.size == 0:
+        print(f"No valid pixels found for class: {class_name}")
+        continue
+
+    # Randomly select one index for the current class
+    random_index = valid_indices[np.random.choice(valid_indices.shape[0], 1, replace=False)][0]
+    i, j = random_index
+
     # Extract raw spectral data (e.g., 200 bands)
     pixel_raw = ip_data[i, j, :]
-    # Convert ground truth label (1-indexed) to 0-index for lookup in CLASS_NAMES
-    pixel_class_idx = int(ip_labels[i, j]) - 1
-    pixel_class_name = CLASS_NAMES[pixel_class_idx]
-    
+
     print(f"Pixel position: height = {i}, width = {j}")
-    # Format spectral data as comma separated values with 6 decimal places
     spectral_str = ", ".join([f"{val:.6f}" for val in pixel_raw])
     print("Pixel spectral data:", spectral_str)
-    print("Pixel class:", pixel_class_name)
+    print("Pixel class:", class_name)
     print("-" * 50)

@@ -7,8 +7,7 @@ from torch.utils.data import TensorDataset, DataLoader
 import json
 from collections import Counter
 
-# Set device (MPS if available)
-device = torch.device("mps")  # fallback: torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Class names for Indian Pines dataset (0-based after background removal)
 CLASS_NAMES = {
@@ -160,13 +159,9 @@ class SpectralTransformer(nn.Module):
         seq_avg = x_enc.mean(dim=1)
         # Classification head producing logits
         logits = self.classifier(seq_avg)
-        # Convert logits to log probabilities
-        log_probs = torch.log_softmax(logits, dim=1)
-        
         if return_probs:
-            return torch.exp(log_probs)
-        else:
-            return log_probs
+            return torch.softmax(logits, dim=1)
+        return logits
 
 # Instantiate the model for Indian Pines
 num_bands = X_ip_train.shape[1]
@@ -190,8 +185,8 @@ test_dataset  = TensorDataset(X_test_tensor, y_test_tensor)
 train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 test_loader  = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
-# Update loss function: Use NLLLoss which expects log probabilities
-criterion = nn.NLLLoss()
+# Update loss function: Use CrossEntropyLoss
+criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # Early stopping settings
@@ -271,6 +266,7 @@ print(f"Final Test Accuracy: {final_test_accuracy*100:.2f}%")
 
 # Export the model to ONNX format (the exported model outputs log probabilities; apply softmax as needed)
 dummy_input = torch.randn(1, num_bands, requires_grad=True).to(device)
+dummy_input = dummy_input.to("cpu")
 torch.onnx.export(
     model,
     dummy_input,
@@ -290,7 +286,7 @@ inference_params = {
     'CLASS_NAMES': CLASS_NAMES
 }
 torch.save(inference_params, "/Users/phani/Desktop/AI/spectra-luma/model/inference_params.pth")
-params = {"CLASS_NAMES": CLASS_NAMES, "band_min": band_min, "band_max": band_max}
+params = {"CLASS_NAMES": CLASS_NAMES, "band_min": band_min.tolist(), "band_max": band_max.tolist()}
 with open("/Users/phani/Desktop/AI/spectra-luma/model/inference_params.json", "w") as f:
     json.dump(params, f)
 

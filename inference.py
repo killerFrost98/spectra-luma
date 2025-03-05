@@ -1,104 +1,40 @@
 import numpy as np
-import onnxruntime
 import torch
+import onnxruntime as ort
 
-# Provided CLASS_NAMES mapping
-CLASS_NAMES = {
-    0: "Alfalfa",
-    1: "Corn-notill",
-    2: "Corn-mintill",
-    3: "Corn",
-    4: "Grass-pasture",
-    5: "Grass-trees",
-    6: "Grass-pasture-mowed",
-    7: "Hay-windrowed",
-    8: "Oats",
-    9: "Soybean-notill",
-    10: "Soybean-mintill",
-    11: "Soybean-clean",
-    12: "Wheat",
-    13: "Woods",
-    14: "Buildings-Grass-Trees-Drives",
-    15: "Stone-Steel-Towers"
-}
+# 1. Ask user for comma separated spectral input
+user_input = '''4020.000000, 4656.000000, 5169.000000, 5181.000000, 5762.000000, 6167.000000, 6358.000000, 6255.000000, 6423.000000, 6105.000000, 6121.000000, 6136.000000, 5968.000000, 6167.000000, 6221.000000, 6225.000000, 6139.000000, 5942.000000, 5919.000000, 5824.000000, 5794.000000, 5805.000000, 5788.000000, 5700.000000, 5695.000000, 5649.000000, 5494.000000, 5626.000000, 5599.000000, 5151.000000, 5238.000000, 5054.000000, 5188.000000, 5413.000000, 5088.000000, 4844.000000, 5291.000000, 5578.000000, 5375.000000, 3690.000000, 5431.000000, 5482.000000, 5297.000000, 5116.000000, 4841.000000, 4438.000000, 4608.000000, 5007.000000, 4904.000000, 4874.000000, 4814.000000, 4770.000000, 4711.000000, 3946.000000, 3799.000000, 3664.000000, 3310.000000, 2125.000000, 2284.000000, 2444.000000, 3086.000000, 2803.000000, 3954.000000, 4181.000000, 4060.000000, 4090.000000, 4008.000000, 3936.000000, 3908.000000, 3850.000000, 3758.000000, 3666.000000, 3603.000000, 2689.000000, 3083.000000, 2566.000000, 1641.000000, 1516.000000, 1764.000000, 1699.000000, 2103.000000, 2620.000000, 2767.000000, 2724.000000, 2793.000000, 2736.000000, 2828.000000, 2865.000000, 2966.000000, 2944.000000, 2856.000000, 2565.000000, 2655.000000, 2758.000000, 2540.000000, 2682.000000, 2681.000000, 2539.000000, 2284.000000, 2126.000000, 1779.000000, 1519.000000, 1101.000000, 1041.000000, 1060.000000, 1099.000000, 1136.000000, 1257.000000, 1344.000000, 1274.000000, 1372.000000, 1629.000000, 1858.000000, 2000.000000, 2103.000000, 2146.000000, 2192.000000, 2174.000000, 2155.000000, 2050.000000, 2056.000000, 2071.000000, 2036.000000, 2010.000000, 2059.000000, 2046.000000, 1993.000000, 1976.000000, 1961.000000, 1947.000000, 1915.000000, 1890.000000, 1852.000000, 1814.000000, 1780.000000, 1719.000000, 1674.000000, 1646.000000, 1599.000000, 1504.000000, 1385.000000, 1269.000000, 1124.000000, 1040.000000, 1026.000000, 1041.000000, 1093.000000, 1194.000000, 1279.000000, 1222.000000, 1098.000000, 1093.000000, 1204.000000, 1333.000000, 1322.000000, 1251.000000, 1244.000000, 1298.000000, 1349.000000, 1368.000000, 1376.000000, 1367.000000, 1363.000000, 1367.000000, 1356.000000, 1322.000000, 1313.000000, 1315.000000, 1307.000000, 1308.000000, 1286.000000, 1304.000000, 1289.000000, 1277.000000, 1259.000000, 1238.000000, 1224.000000, 1218.000000, 1206.000000, 1196.000000, 1192.000000, 1190.000000, 1168.000000, 1167.000000, 1158.000000, 1147.000000, 1157.000000, 1134.000000, 1109.000000, 1129.000000, 1123.000000, 1101.000000, 1097.000000, 1101.000000, 1081.000000, 1066.000000, 1063.000000, 1054.000000, 1026.000000, 1015.000000'''
+spectral_values = [float(x.strip()) for x in user_input.split(",")]
+spectral_array = np.array(spectral_values, dtype=np.float32).reshape(1, -1)  # shape: (1, num_bands)
 
-def main():
-    global CLASS_NAMES
-    print("[INFO] Loading inference parameters...")
-    try:
-        inference_params = torch.load("/Users/phani/Desktop/AI/spectra-luma/model/inference_params.pth", map_location=torch.device('cpu'))
-        band_min = inference_params['band_min']  # numpy array of shape (num_bands,)
-        band_max = inference_params['band_max']  # numpy array of shape (num_bands,)
-        num_bands = band_min.shape[0]
-        if 'CLASS_NAMES' in inference_params:
-            CLASS_NAMES = inference_params['CLASS_NAMES']
-        print("[SUCCESS] Loaded inference parameters successfully!")
-    except Exception as e:
-        print(f"[ERROR] Failed to load inference parameters: {e}")
-        return
+# 2. Load inference parameters from the pth file
+inference_params = torch.load("/Users/phani/Desktop/AI/spectra-luma/model/inference_params.pth", map_location="cpu")
+CLASS_NAMES = inference_params["CLASS_NAMES"]
+band_min = inference_params["band_min"]
+band_max = inference_params["band_max"]
+num_bands = len(band_min)
 
-    print("[INFO] Loading ONNX model...")
-    try:
-        session = onnxruntime.InferenceSession("/Users/phani/Desktop/AI/spectra-luma/model/SpectralTransformer.onnx")
-        print("[SUCCESS] ONNX model loaded successfully!")
-    except Exception as e:
-        print(f"[ERROR] Failed to load ONNX model: {e}")
-        return
+# Check if the input length matches the expected number of bands
+if spectral_array.shape[1] != num_bands:
+    print(f"Error: Expected {num_bands} bands but got {spectral_array.shape[1]} bands.")
+    exit(1)
 
-    # Retrieve input and output names from the ONNX model
-    try:
-        input_name = session.get_inputs()[0].name
-        output_name = session.get_outputs()[0].name
-        print(f"[INFO] Model Input Name: {input_name}")
-        print(f"[INFO] Model Output Name: {output_name}")
-    except Exception as e:
-        print(f"[ERROR] Failed to retrieve model input/output names: {e}")
-        return
+# 3. Load the ONNX model
+ort_session = ort.InferenceSession("/Users/phani/Desktop/AI/spectra-luma/model/SpectralTransformer.onnx")
 
-    # Prompt user for spectral data
-    user_input = "2592.000000, 4373.000000, 4501.000000, 4573.000000, 5082.000000, 5409.000000, 5601.000000, 5537.000000, 5598.000000, 5281.000000, 5392.000000, 5379.000000, 5233.000000, 5448.000000, 5565.000000, 5590.000000, 5496.000000, 5390.000000, 5309.000000, 5265.000000, 5274.000000, 5340.000000, 5269.000000, 5248.000000, 5300.000000, 5210.000000, 5094.000000, 5237.000000, 5230.000000, 4842.000000, 5006.000000, 4775.000000, 5019.000000, 5271.000000, 5193.000000, 5095.000000, 5700.000000, 6004.000000, 5897.000000, 4123.000000, 5889.000000, 6018.000000, 5760.000000, 5620.000000, 5345.000000, 4905.000000, 5088.000000, 5538.000000, 5515.000000, 5472.000000, 5499.000000, 5464.000000, 5357.000000, 4487.000000, 4267.000000, 4175.000000, 3759.000000, 2277.000000, 2448.000000, 2699.000000, 2763.000000, 4100.000000, 4595.000000, 4835.000000, 4752.000000, 4743.000000, 4713.000000, 4683.000000, 4588.000000, 4574.000000, 4433.000000, 4334.000000, 4244.000000, 4076.000000, 3646.000000, 2967.000000, 1781.000000, 1641.000000, 1937.000000, 1843.000000, 2443.000000, 3075.000000, 3190.000000, 3202.000000, 3262.000000, 3263.000000, 2564.000000, 2700.000000, 2740.000000, 2716.000000, 2584.000000, 3020.000000, 3119.000000, 2567.000000, 2993.000000, 3226.000000, 3211.000000, 3006.000000, 2693.000000, 2456.000000, 1988.000000, 1650.000000, 1113.000000, 1049.000000, 1078.000000, 1120.000000, 1151.000000, 1318.000000, 1432.000000, 1321.000000, 1446.000000, 1777.000000, 2062.000000, 2271.000000, 2394.000000, 2472.000000, 2512.000000, 2511.000000, 2497.000000, 2357.000000, 2373.000000, 2404.000000, 2359.000000, 2337.000000, 2411.000000, 2391.000000, 2327.000000, 2300.000000, 2297.000000, 2251.000000, 2228.000000, 2183.000000, 2140.000000, 2080.000000, 2036.000000, 1949.000000, 1877.000000, 1863.000000, 1792.000000, 1663.000000, 1491.000000, 1351.000000, 1157.000000, 1056.000000, 1036.000000, 1046.000000, 1132.000000, 1275.000000, 1392.000000, 1319.000000, 1131.000000, 1125.000000, 1294.000000, 1424.000000, 1424.000000, 1329.000000, 1321.000000, 1380.000000, 1454.000000, 1482.000000, 1502.000000, 1488.000000, 1477.000000, 1486.000000, 1469.000000, 1439.000000, 1424.000000, 1422.000000, 1411.000000, 1397.000000, 1379.000000, 1406.000000, 1401.000000, 1396.000000, 1375.000000, 1346.000000, 1332.000000, 1320.000000, 1311.000000, 1289.000000, 1292.000000, 1289.000000, 1254.000000, 1251.000000, 1238.000000, 1208.000000, 1211.000000, 1173.000000, 1168.000000, 1160.000000, 1162.000000, 1128.000000, 1125.000000, 1126.000000, 1110.000000, 1085.000000, 1095.000000, 1073.000000, 1032.000000, 1019.000000"
-    try:
-        spectral_data = np.array([float(x.strip()) for x in user_input.split(',')])
-        print("[INFO] User input parsed successfully.")
-    except ValueError:
-        print("[ERROR] Invalid input. Please enter numerical values separated by commas.")
-        return
+# Prepare the input dictionary for ONNX
+ort_inputs = {ort_session.get_inputs()[0].name: spectral_array}
 
-    # Validate input length
-    if spectral_data.shape[0] != num_bands:
-        print(f"[ERROR] Invalid input length. Expected {num_bands} values, but got {spectral_data.shape[0]}.")
-        return
+# Run the model to get logits; the exported model outputs raw logits
+logits = ort_session.run(None, ort_inputs)[0]  # shape: (1, num_classes)
 
-    print("[INFO] Normalizing input data...")
-    spectral_data_norm = (spectral_data - band_min) / (band_max - band_min + 1e-6)
-    print("[SUCCESS] Normalized input data.")
+# 4. Apply softmax to obtain probabilities
+exp_logits = np.exp(logits)
+probabilities = exp_logits / np.sum(exp_logits, axis=1, keepdims=True)
 
-    # Reshape input data for model inference
-    input_array = spectral_data_norm.astype(np.float32).reshape(1, -1)
-    print(f"[INFO] Input data reshaped to: {input_array.shape}")
-
-    # Run inference with the ONNX model
-    print("[INFO] Running inference...")
-    try:
-        outputs = session.run([output_name], {input_name: input_array})
-        logits = outputs[0]
-        print("[SUCCESS] Inference completed successfully.")
-    except Exception as e:
-        print(f"[ERROR] Model inference failed: {e}")
-        return
-
-    # Compute softmax probabilities
-    exp_logits = np.exp(logits - np.max(logits, axis=1, keepdims=True))
-    probabilities = exp_logits / np.sum(exp_logits, axis=1, keepdims=True)
-    probabilities = probabilities[0]  # remove the batch dimension
-
-    # Get top 3 predictions
-    top3_indices = np.argsort(probabilities)[::-1][:3]
-    print("[INFO] Top 3 predictions:")
-    for idx in top3_indices:
-        label = CLASS_NAMES.get(idx, "Unknown")
-        confidence = probabilities[idx] * 100
-        print(f"{label}: {confidence:.2f}%")
-
-if __name__ == "__main__":
-    main()
+# 5. Sort and show all probabilities with class names as percentages (in descending order)
+sorted_indices = np.argsort(probabilities[0])[::-1]  # descending order
+print("\nProbabilities (sorted):")
+for idx in sorted_indices:
+    class_name = CLASS_NAMES.get(idx, f"Class {idx}")
+    print(f"{class_name}: {probabilities[0][idx] * 100:.2f}%")
