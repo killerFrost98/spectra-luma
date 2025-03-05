@@ -89,39 +89,69 @@ band_max = X_ip_train.max(axis=0)
 print("Band Min:", band_min)
 print("Band Max:", band_max)
 
-# Define the SpectralTransformer model with integrated normalization
-# Define the SpectralTransformer model with integrated normalization and log-softmax
+# Define a function to compute the static sinusoidal positional encoding
+def get_static_positional_encoding(n_bands, d_model):
+    """
+    Computes the sinusoidal positional encoding table.
+    
+    Args:
+        n_bands (int): Number of positions (bands) to generate encodings for.
+        d_model (int): Dimensionality of the model.
+    
+    Returns:
+        torch.Tensor: A tensor of shape (n_bands, d_model) containing the positional encodings.
+    """
+    position = np.arange(n_bands)[:, np.newaxis]  # (n_bands, 1)
+    div_term = np.exp(np.arange(0, d_model, 2) * -(np.log(10000.0) / d_model))
+    pe = np.zeros((n_bands, d_model))
+    pe[:, 0::2] = np.sin(position * div_term)
+    pe[:, 1::2] = np.cos(position * div_term)
+    return torch.tensor(pe, dtype=torch.float32)
+
+# Modified SpectralTransformer model using static positional encoding
 class SpectralTransformer(nn.Module):
     def __init__(self, num_bands, num_classes, band_min, band_max, d_model=64, nhead=8, num_layers=2, dim_feedforward=128):
         super(SpectralTransformer, self).__init__()
-        # Register the normalization parameters as buffers (not trainable)
+        
+        # Register the normalization parameters as buffers (they won't be trainable)
         self.register_buffer("band_min", torch.tensor(band_min, dtype=torch.float32))
         self.register_buffer("band_max", torch.tensor(band_max, dtype=torch.float32))
         self.eps = 1e-8  # small epsilon to avoid division by zero
         
         # 1. Linear projection: from a scalar spectral value to d_model
         self.value_embed = nn.Linear(1, d_model)
-        # 2. Learnable positional encoding for each spectral band
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_bands, d_model))
+        
+        # 2. Static positional encoding for 200 bands
+        static_pe = get_static_positional_encoding(200, d_model)
+        # Adjust the positional encoding to match num_bands if necessary
+        if num_bands < 200:
+            static_pe = static_pe[:num_bands, :]
+        elif num_bands > 200:
+            static_pe = static_pe[:num_bands, :]  # simple truncation (or consider interpolation)
+        # Register as a buffer so it remains fixed
+        self.register_buffer("pos_embed", static_pe.unsqueeze(0))  # shape: (1, num_bands, d_model)
+        
         # 3. Layer normalization for the embedded spectral values
         self.input_norm = nn.LayerNorm(d_model)
+        
         # 4. Transformer encoder layers
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead,
                                                    dim_feedforward=dim_feedforward, batch_first=True)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
         # 5. Classification head mapping aggregated output to class logits
         self.classifier = nn.Linear(d_model, num_classes)
     
     def forward(self, x, return_probs=False):
         # x: (batch_size, num_bands)
-        # Normalize each spectral band on the fly using stored parameters
+        # Normalize each spectral band using stored min and max
         x = (x - self.band_min) / (self.band_max - self.band_min + self.eps)
         
         batch_size, seq_len = x.shape
-        # Expand to add a singleton dimension for linear projection: (batch, seq_len, 1)
+        # Linear projection: expand dimensions to (batch, seq_len, 1)
         x_emb = self.value_embed(x.unsqueeze(-1))
-        # Add positional encoding
-        x_emb = x_emb + self.pos_embed
+        # Add static positional encoding (make sure to slice if seq_len is less than pos_embed's size)
+        x_emb = x_emb + self.pos_embed[:, :seq_len, :]
         # Apply layer normalization
         x_emb = self.input_norm(x_emb)
         # Pass through transformer encoder layers
@@ -130,14 +160,12 @@ class SpectralTransformer(nn.Module):
         seq_avg = x_enc.mean(dim=1)
         # Classification head producing logits
         logits = self.classifier(seq_avg)
-        # Convert logits to log probabilities for numerical stability
+        # Convert logits to log probabilities
         log_probs = torch.log_softmax(logits, dim=1)
         
         if return_probs:
-            # Return probabilities by exponentiating the log probabilities
             return torch.exp(log_probs)
         else:
-            # Return log probabilities (for use with NLLLoss)
             return log_probs
 
 # Instantiate the model for Indian Pines
