@@ -40,7 +40,6 @@
     <canvas id="attentionChart"></canvas>
 
     <script>
-        // Ensure that the code runs only after the window (and all external scripts) is fully loaded.
         window.addEventListener('load', function () {
             let session;
             let inferenceParams;
@@ -86,7 +85,7 @@
             async function loadModel() {
                 const outputElem = document.getElementById("output");
                 try {
-                    const modelUrl = "../model/SpectralTransformer.onnx";
+                    const modelUrl = "../model/indian_pines_transformer.onnx";
                     session = await ort.InferenceSession.create(modelUrl);
                     outputElem.textContent += "[SUCCESS] ONNX model loaded successfully.\n";
                 } catch (err) {
@@ -97,10 +96,11 @@
             async function loadInferenceParameters() {
                 const outputElem = document.getElementById("output");
                 try {
-                    const response = await fetch("../model/inference_params.json");
+                    const response = await fetch("../model/indian_pines_transformer_inference_params.json");
                     if (!response.ok) throw new Error("HTTP error " + response.status);
                     inferenceParams = await response.json();
                     outputElem.textContent += "[SUCCESS] Loaded inference parameters successfully.\n";
+                    // Expecting inferenceParams to include CLASS_NAMES, band_min, and band_max.
                     CLASS_NAMES = inferenceParams.CLASS_NAMES || {};
                 } catch (err) {
                     outputElem.textContent += "[ERROR] Failed to load inference parameters: " + err + "\n";
@@ -222,19 +222,21 @@
                 const inputTensor = new ort.Tensor("float32", rawData, [1, numBands]);
 
                 try {
-                    const inputName = session.inputNames[0]; // Dynamically obtain the input name
+                    // Dynamically obtain the input name
+                    const inputName = session.inputNames[0];
                     const feeds = {
                         [inputName]: inputTensor
                     };
                     const results = await session.run(feeds);
 
-                    // Process logits output: apply softmax to obtain probabilities
-                    const logits = Array.from(results.output.data);
+                    // Use the first output (assumed to be class probabilities)
+                    const classProbsTensor = results[session.outputNames[0]];
+                    const logits = Array.from(classProbsTensor.data);
                     const expLogits = logits.map(x => Math.exp(x));
                     const sumExp = expLogits.reduce((a, b) => a + b, 0);
                     const probabilities = expLogits.map(x => x / sumExp);
 
-                    // Pair each probability with its class index and sort them
+                    // Sort predictions and display top 3
                     const predictions = probabilities.map((value, index) => ({
                         index,
                         value
@@ -248,10 +250,41 @@
                     });
                     outputElem.textContent += resultText;
 
-                    // If attention weights are provided by the model, display the attention map.
-                    if ("attention_weights" in results) {
-                        const attentionWeights = Array.from(results.attention_weights.data);
-                        createAttentionMap(attentionWeights);
+                    // Process attention weights if provided by the model.
+                    if (session.outputNames.length > 1 && results[session.outputNames[1]]) {
+                        const attentionTensor = results[session.outputNames[1]];
+                        const attnData = Array.from(attentionTensor.data);
+                        const attnDims = attentionTensor.dims;
+                        let clsAttnToBands = null;
+
+                        // Handle different possible dimensions.
+                        if (attnDims.length === 4) {
+                            // Expected shape: [batch, nHeads, queryLen, keyLen]
+                            const [batch, nHeads, queryLen, keyLen] = attnDims;
+                            // Extract the first batch, first head, first query row.
+                            const elementsPerRow = keyLen;
+                            const clsAttn = attnData.slice(0, elementsPerRow);
+                            clsAttnToBands = clsAttn.slice(1);
+                        } else if (attnDims.length === 3) {
+                            // Expected shape: [nHeads, queryLen, keyLen]
+                            const [nHeads, queryLen, keyLen] = attnDims;
+                            // Extract the first head's first query row.
+                            const elementsPerRow = keyLen;
+                            const clsAttn = attnData.slice(0, elementsPerRow);
+                            clsAttnToBands = clsAttn.slice(1);
+                        } else if (attnDims.length === 2) {
+                            // Expected shape: [queryLen, keyLen]
+                            const [queryLen, keyLen] = attnDims;
+                            // Extract the first row.
+                            const clsAttn = attnData.slice(0, keyLen);
+                            clsAttnToBands = clsAttn.slice(1);
+                        } else {
+                            outputElem.textContent += "[ERROR] Unexpected attention tensor dimensions.\n";
+                        }
+
+                        if (clsAttnToBands) {
+                            createAttentionMap(clsAttnToBands);
+                        }
                     } else {
                         outputElem.textContent += "[INFO] Attention weights not provided by the model.\n";
                     }

@@ -7,11 +7,33 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.onnx as onnx
 
+import json
+
 # Device selection: use CUDA if available, else MPS (for Apple devices), else CPU
 device = torch.device("cuda" if torch.cuda.is_available() 
                       else ("mps" if hasattr(torch.backends, "mps") and torch.backends.mps.is_available() 
                             else "cpu"))
 print("Using device:", device)
+
+# Class names for Indian Pines dataset (0-based after background removal)
+CLASS_NAMES = {
+    0: "Alfalfa",
+    1: "Corn-notill",
+    2: "Corn-mintill",
+    3: "Corn",
+    4: "Grass-pasture",
+    5: "Grass-trees",
+    6: "Grass-pasture-mowed",
+    7: "Hay-windrowed",
+    8: "Oats",
+    9: "Soybean-notill",
+    10: "Soybean-mintill",
+    11: "Soybean-clean",
+    12: "Wheat",
+    13: "Woods",
+    14: "Buildings-Grass-Trees-Drives",
+    15: "Stone-Steel-Towers"
+}
 
 # Load hyperspectral data and labels (assuming .mat files)
 data_mat = sio.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/Indian_pines_corrected.mat')
@@ -59,8 +81,11 @@ def normalize_data(X, method='band_minmax', params=None):
     raise ValueError(f"Unknown method: {method}")
 
 # Choose a normalization method
-method = 'band_zscore'
+method = 'band_minmax'
 pixels_norm, norm_params = normalize_data(pixels.astype(np.float32), method=method)
+
+band_min = norm_params['min']
+band_max = norm_params['max']
 
 # Split into train and validation sets
 X_train, X_val, y_train, y_val = train_test_split(
@@ -136,7 +161,7 @@ X_val_tensor   = torch.tensor(X_val, dtype=torch.float32).to(device)
 y_val_tensor   = torch.tensor(y_val, dtype=torch.long).to(device)
 
 # Simple training loop
-num_epochs = 2
+num_epochs = 50
 batch_size = 32
 for epoch in range(1, num_epochs+1):
     permutation = torch.randperm(X_train_tensor.size(0))
@@ -188,3 +213,17 @@ onnx.export(model_cpu, dummy_input, onnx_file,
                           "class_probabilities": {0: "batch_size"},
                           "attention_weights": {0: "batch_size"}})
 print(f"Model exported to {onnx_file}")
+
+# Save inference parameters (for restoring normalization and class mapping)
+inference_params = {
+    'model_state_dict': model.state_dict(),
+    'band_min': band_min.tolist(),
+    'band_max': band_max.tolist(),
+    'CLASS_NAMES': CLASS_NAMES
+}
+torch.save(inference_params, "/Users/phani/Desktop/AI/spectra-luma/model/indian_pines_transformer_inference_params.pth")
+params = {"CLASS_NAMES": CLASS_NAMES, "band_min": band_min.tolist(), "band_max": band_max.tolist()}
+with open("/Users/phani/Desktop/AI/spectra-luma/model/indian_pines_transformer_inference_params.json", "w") as f:
+    json.dump(params, f)
+
+print("Model and inference parameters have been successfully saved.")
