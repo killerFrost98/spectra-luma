@@ -47,8 +47,16 @@ CLASS_NAMES = {
     15: "Stone-Steel-Towers"
 }
 
+# Print all class probabilities
+print("\nClass Probabilities:")
+for class_idx, class_name in CLASS_NAMES.items():
+    print(f"{class_name}: {class_probs[0][class_idx]:.4f}")
+
+# Get predicted class index
+predicted_class = np.argmax(class_probs, axis=1)[0]
 predicted_class_name = CLASS_NAMES.get(predicted_class)
-print("Predicted class:", predicted_class_name)
+
+print("\nPredicted class:", predicted_class_name)
 
 # ---------------------------
 # 1. Plot the Spectral Data
