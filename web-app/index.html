@@ -46,8 +46,8 @@
     <h2>Output</h2>
     <pre id="output"></pre>
 
-    <!-- Attention map: displays band importance if available -->
-    <h2>Attention Map</h2>
+    <!-- Attention map: displays mapped band importance -->
+    <h2>Attention Map (Mapped to Original Bands)</h2>
     <canvas id="attentionChart"></canvas>
 
     <script>
@@ -55,7 +55,7 @@
             let session;
             let inferenceParams;
             let CLASS_NAMES = {};
-            // Default hardcoded spectral data (used to populate the chart initially)
+            // Default hardcoded spectral data (200 bands)
             let spectralData = [
                 2561.000000, 3990.000000, 4379.000000, 4252.000000, 4692.000000, 4959.000000,
                 5042.000000, 4971.000000, 4991.000000, 4705.000000, 4729.000000, 4706.000000,
@@ -112,7 +112,7 @@
                     if (!response.ok) throw new Error("HTTP error " + response.status);
                     inferenceParams = await response.json();
                     outputElem.textContent += "[SUCCESS] Loaded inference parameters successfully.\n";
-                    // Expecting inferenceParams to include CLASS_NAMES, band_min, and band_max.
+                    // Expecting inferenceParams to include CLASS_NAMES, band_min, band_max, pca_mean, and pca_components.
                     CLASS_NAMES = inferenceParams.CLASS_NAMES || {};
                 } catch (err) {
                     outputElem.textContent += "[ERROR] Failed to load inference parameters: " + err + "\n";
@@ -142,10 +142,8 @@
                             dragData: {
                                 round: 0,
                                 onDrag: function (event, datasetIndex, index, value) {
-                                    // Update the spectral data from the drag event.
                                     spectralData[index] = value;
                                     spectralChart.data.datasets[datasetIndex].data[index] = value;
-                                    // Update the text input with the new spectral data as comma-separated values.
                                     document.getElementById("spectralInput").value = spectralData.join(
                                         ", ");
                                     spectralChart.update();
@@ -172,16 +170,7 @@
                 });
             }
 
-            // Normalization function matching your Python training code (band_minmax)
-            function normalizeSpectralData(data, bandMin, bandMax) {
-                return data.map((value, i) => {
-                    const min = bandMin[i];
-                    const max = bandMax[i];
-                    return (value - min) / (max - min + 1e-8);
-                });
-            }
-
-            // Update the chart whenever the input field changes.
+            // Update chart when input field changes.
             document.getElementById("spectralInput").addEventListener("input", function () {
                 const inputText = this.value;
                 if (inputText.trim() !== "") {
@@ -189,7 +178,6 @@
                         !isNaN(x));
                     if (parsedData.length > 0) {
                         spectralData = parsedData;
-                        // Update chart labels and data
                         spectralChart.data.labels = Array.from({
                             length: spectralData.length
                         }, (_, i) => i + 1);
@@ -199,29 +187,48 @@
                 }
             });
 
+            // Perform PCA transformation on raw spectral data.
+            function applyPCATransform(rawData, pcaMean, pcaComponents) {
+                const numComponents = pcaComponents.length; // e.g., 30 components
+                const originalDim = pcaMean.length; // should be 200
+                let pcaOutput = new Array(numComponents).fill(0);
+                for (let i = 0; i < numComponents; i++) {
+                    let sum = 0;
+                    for (let j = 0; j < originalDim; j++) {
+                        sum += (rawData[j] - pcaMean[j]) * pcaComponents[i][j];
+                    }
+                    pcaOutput[i] = sum;
+                }
+                return pcaOutput;
+            }
+
+            // Normalize data using band_minmax (applied on PCA-transformed data).
+            function normalizeData(data, bandMin, bandMax) {
+                return data.map((value, i) => (value - bandMin[i]) / (bandMax[i] - bandMin[i] + 1e-8));
+            }
+
             async function runInference() {
                 const outputElem = document.getElementById("output");
                 outputElem.textContent = "";
 
-                // Check if model and parameters are loaded
                 if (!session) {
                     outputElem.textContent += "[ERROR] ONNX model session not loaded.\n";
                     return;
                 }
-                if (!inferenceParams || !inferenceParams.band_min || !inferenceParams.band_max) {
-                    outputElem.textContent += "[ERROR] Inference parameters not loaded.\n";
+                if (!inferenceParams || !inferenceParams.band_min || !inferenceParams.band_max || !
+                    inferenceParams.pca_mean || !inferenceParams.pca_components) {
+                    outputElem.textContent += "[ERROR] Inference parameters not loaded or incomplete.\n";
                     return;
                 }
 
-                // Read the spectral input from the input box.
+                // Read spectral input
                 const spectralInputText = document.getElementById("spectralInput").value;
                 if (spectralInputText.trim() !== "") {
-                    // Parse the comma-separated values into a numerical array
                     const parsedData = spectralInputText.split(",").map(x => parseFloat(x.trim())).filter(x =>
                         !isNaN(x));
-                    if (parsedData.length !== inferenceParams.band_min.length) {
+                    if (parsedData.length !== inferenceParams.pca_mean.length) {
                         outputElem.textContent +=
-                            `[ERROR] Expected ${inferenceParams.band_min.length} bands but got ${parsedData.length} bands from input.\n`;
+                            `[ERROR] Expected ${inferenceParams.pca_mean.length} bands but got ${parsedData.length} bands from input.\n`;
                         return;
                     }
                     spectralData = parsedData;
@@ -229,32 +236,37 @@
                     outputElem.textContent += "[INFO] No input provided; using default spectral data.\n";
                 }
 
-                // Update chart to reflect new spectral data
+                // Update spectral chart
                 spectralChart.data.datasets[0].data = spectralData;
                 spectralChart.update();
 
-                // Normalize the input spectral data using the saved parameters
-                const normalizedData = normalizeSpectralData(spectralData, inferenceParams.band_min,
-                    inferenceParams.band_max);
-                const numBands = normalizedData.length;
-                const rawData = new Float32Array(normalizedData);
-                const inputTensor = new ort.Tensor("float32", rawData, [1, numBands]);
+                // Apply PCA transformation on the raw 200-band data.
+                const pcaMean = inferenceParams.pca_mean; // Array of length 200
+                const pcaComponents = inferenceParams.pca_components; // 2D Array: [numPCAComponents][200]
+                const pcaOutput = applyPCATransform(spectralData, pcaMean, pcaComponents);
+
+                // Normalize the PCA-transformed data using saved band_min and band_max (for PCA space)
+                const normalizedData = normalizeData(pcaOutput, inferenceParams.band_min, inferenceParams.band_max);
+                const numComponents = normalizedData.length;
+
+                // Create an ONNX tensor from the normalized PCA output.
+                const inputTensor = new ort.Tensor("float32", new Float32Array(normalizedData), [1,
+                    numComponents
+                ]);
 
                 try {
-                    // Dynamically obtain the input name
                     const inputName = session.inputNames[0];
                     const feeds = {
                         [inputName]: inputTensor
                     };
                     const results = await session.run(feeds);
 
-                    // Use the first output (assumed to be class probabilities)
+                    // Process class probabilities (first output)
                     const classProbsTensor = results[session.outputNames[0]];
                     const logits = Array.from(classProbsTensor.data);
                     const expLogits = logits.map(x => Math.exp(x));
                     const sumExp = expLogits.reduce((a, b) => a + b, 0);
                     const probabilities = expLogits.map(x => x / sumExp);
-
                     const predictions = probabilities.map((value, index) => ({
                         index,
                         value
@@ -267,40 +279,45 @@
                     });
                     outputElem.textContent += resultText;
 
-                    // Process attention weights if provided by the model.
+                    // Process attention weights if available.
                     if (session.outputNames.length > 1 && results[session.outputNames[1]]) {
                         const attentionTensor = results[session.outputNames[1]];
                         const attnData = Array.from(attentionTensor.data);
                         const attnDims = attentionTensor.dims;
-                        let clsAttnToBands = null;
+                        let clsAttnToComponents = null;
 
-                        // Handle different possible dimensions.
+                        // Extract attention from the first query row (excluding the [CLS] token).
                         if (attnDims.length === 4) {
-                            // Expected shape: [batch, nHeads, queryLen, keyLen]
+                            // Shape: [batch, nHeads, queryLen, keyLen]
                             const [batch, nHeads, queryLen, keyLen] = attnDims;
-                            // Extract the first batch, first head, first query row.
                             const elementsPerRow = keyLen;
-                            const clsAttn = attnData.slice(0, elementsPerRow);
-                            clsAttnToBands = clsAttn.slice(1);
+                            const clsAttn = attnData.slice(0, elementsPerRow); // first query row of first head
+                            clsAttnToComponents = clsAttn.slice(1); // remove [CLS] token attention
                         } else if (attnDims.length === 3) {
-                            // Expected shape: [nHeads, queryLen, keyLen]
+                            // Shape: [nHeads, queryLen, keyLen]
                             const [nHeads, queryLen, keyLen] = attnDims;
-                            // Extract the first head's first query row.
                             const elementsPerRow = keyLen;
                             const clsAttn = attnData.slice(0, elementsPerRow);
-                            clsAttnToBands = clsAttn.slice(1);
+                            clsAttnToComponents = clsAttn.slice(1);
                         } else if (attnDims.length === 2) {
-                            // Expected shape: [queryLen, keyLen]
+                            // Shape: [queryLen, keyLen]
                             const [queryLen, keyLen] = attnDims;
-                            // Extract the first row.
                             const clsAttn = attnData.slice(0, keyLen);
-                            clsAttnToBands = clsAttn.slice(1);
+                            clsAttnToComponents = clsAttn.slice(1);
                         } else {
                             outputElem.textContent += "[ERROR] Unexpected attention tensor dimensions.\n";
                         }
 
-                        if (clsAttnToBands) {
-                            createAttentionMap(clsAttnToBands);
+                        if (clsAttnToComponents) {
+                            // Map the PCA attention back to the original 200 bands.
+                            const originalDim = pcaMean.length; // 200
+                            let mappedAttention = new Array(originalDim).fill(0);
+                            for (let j = 0; j < originalDim; j++) {
+                                for (let i = 0; i < clsAttnToComponents.length; i++) {
+                                    mappedAttention[j] += clsAttnToComponents[i] * Math.abs(pcaComponents[i][j]);
+                                }
+                            }
+                            createAttentionMap(mappedAttention);
                         }
                     } else {
                         outputElem.textContent += "[INFO] Attention weights not provided by the model.\n";
@@ -310,9 +327,9 @@
                 }
             }
 
+            // Create the attention map chart (mapped to original 200 bands).
             function createAttentionMap(attentionWeights) {
                 const ctx = document.getElementById('attentionChart').getContext('2d');
-                // Destroy previous attention chart if it exists
                 if (window.attentionChartInstance) {
                     window.attentionChartInstance.destroy();
                 }
@@ -323,7 +340,7 @@
                             length: attentionWeights.length
                         }, (_, i) => i + 1),
                         datasets: [{
-                            label: 'Attention Weight',
+                            label: 'Mapped Attention Weight',
                             data: attentionWeights,
                             borderColor: 'green',
                             backgroundColor: 'rgba(0, 255, 0, 0.1)'
@@ -335,7 +352,7 @@
                             x: {
                                 title: {
                                     display: true,
-                                    text: "Band Index"
+                                    text: "Original Band (Index)"
                                 }
                             },
                             y: {

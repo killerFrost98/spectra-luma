@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.io as sio
 from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA  # New: Import PCA
 
 import torch
 import torch.nn as nn
@@ -41,15 +42,22 @@ image_cube = data_mat['indian_pines_corrected']  # shape (145, 145, 200)
 gt_mat = sio.loadmat('/Users/phani/Desktop/AI/spectra-luma/dataset/Indian_pines_gt.mat')
 labels_map = gt_mat['indian_pines_gt']  # shape (145, 145)
 
-# Flatten the image cube to [num_pixels, num_bands] and labels to [num_pixels]
+# Flatten the image cube to [num_pixels, num_bands]
 H, W, B = image_cube.shape  # B = 200 spectral bands
-pixels = image_cube.reshape(-1, B)              # shape (21025, 200)
-labels = labels_map.reshape(-1)                 # shape (21025,)
-# Filter out unlabeled pixels (assume 0 indicates no class)
+all_pixels = image_cube.reshape(-1, B)              # shape (21025, 200)
+
+# --- Apply PCA on all data to select the most important bands ---
+num_pca_components = 30  # Change this value as needed
+pca = PCA(n_components=num_pca_components)
+all_pixels_pca = pca.fit_transform(all_pixels)        # shape (21025, num_pca_components)
+
+# Prepare labels and filter out unlabeled pixels (assume 0 indicates no class)
+labels = labels_map.reshape(-1)                       # shape (21025,)
 mask = labels > 0
-pixels = pixels[mask]
+pixels = all_pixels_pca[mask]                         # use PCA-transformed data
 labels = labels[mask] - 1  # convert labels to 0-15 range
 print("Total labeled samples:", pixels.shape[0])
+# --- End PCA section ---
 
 # Normalization functions
 def normalize_data(X, method='band_minmax', params=None):
@@ -80,24 +88,25 @@ def normalize_data(X, method='band_minmax', params=None):
         return X_norm, {}
     raise ValueError(f"Unknown method: {method}")
 
-# Choose a normalization method
+# Choose a normalization method and normalize PCA-transformed pixels
 method = 'band_minmax'
 pixels_norm, norm_params = normalize_data(pixels.astype(np.float32), method=method)
 
-band_min = norm_params['min']
-band_max = norm_params['max']
+band_min = norm_params.get('min', None)
+band_max = norm_params.get('max', None)
 
 # Split into train and validation sets
 X_train, X_val, y_train, y_val = train_test_split(
     pixels_norm, labels, test_size=0.2, random_state=42, stratify=labels)
 print("Training samples:", X_train.shape[0], "Validation samples:", X_val.shape[0])
 
+# Define the Spectral Transformer Classifier (updated seq_length based on PCA components)
 class SpectralTransformerClassifier(nn.Module):
-    def __init__(self, seq_length=200, num_classes=16, d_model=64, n_heads=4, num_layers=2, dim_feedforward=256, dropout=0.1):
+    def __init__(self, seq_length=num_pca_components, num_classes=16, d_model=64, n_heads=4, num_layers=2, dim_feedforward=256, dropout=0.1):
         super(SpectralTransformerClassifier, self).__init__()
         self.seq_length = seq_length
         self.d_model = d_model
-        # Learnable positional embeddings for [CLS] + 200 positions
+        # Learnable positional embeddings for [CLS] + seq_length positions
         self.pos_embedding = nn.Parameter(torch.zeros(1, seq_length+1, d_model))
         # Linear projection for band values to d_model
         self.value_proj = nn.Linear(1, d_model)
@@ -113,24 +122,23 @@ class SpectralTransformerClassifier(nn.Module):
     
     def forward(self, x):
         """
-        x: Tensor of shape (batch_size, 200) containing spectral data for each sample.
+        x: Tensor of shape (batch_size, seq_length) containing spectral data for each sample.
         Returns:
             logits: (batch_size, num_classes)
             attn_weights: Attention weights from the first encoder layer (batch_size, n_heads, query_len, key_len)
         """
         batch_size = x.shape[0]
-        # Project each band value to d_model dimension
-        band_embeddings = self.value_proj(x.unsqueeze(-1))  # (batch, 200, d_model)
+        # Project each PCA component to d_model dimension
+        band_embeddings = self.value_proj(x.unsqueeze(-1))  # (batch, seq_length, d_model)
         # Prepend the CLS token embedding to the sequence
         cls_token = self.cls_token.expand(batch_size, -1, -1)  # (batch, 1, d_model)
-        seq_embeddings = torch.cat([cls_token, band_embeddings], dim=1)  # (batch, 201, d_model)
+        seq_embeddings = torch.cat([cls_token, band_embeddings], dim=1)  # (batch, seq_length+1, d_model)
         # Add positional encoding
         seq_embeddings = seq_embeddings + self.pos_embedding[:, :seq_embeddings.size(1), :]
         
         # Process the first encoder layer manually to capture attention weights
         first_layer = self.encoder.layers[0]
         src = seq_embeddings
-        # Call self_attn with need_weights=True; this returns (attn_output, attn_weights)
         src2, attn_weights = first_layer.self_attn(src, src, src, need_weights=True)
         src = src + first_layer.dropout1(src2)
         src = first_layer.norm1(src)
@@ -147,8 +155,8 @@ class SpectralTransformerClassifier(nn.Module):
         logits = self.fc(cls_output)  # (batch, num_classes)
         return logits, attn_weights
 
-# Initialize and train model (training code remains the same)
-model = SpectralTransformerClassifier()
+# Initialize and train model
+model = SpectralTransformerClassifier(seq_length=num_pca_components)
 model = model.to(device)
 model.train()
 criterion = nn.CrossEntropyLoss()
@@ -199,12 +207,13 @@ with torch.no_grad():
     # For demonstration, average attention weights over heads for the [CLS] token:
     attn_weights_np = attn_weights.cpu().numpy()
     cls_attn = attn_weights_np[0, 0, :]  # (key_len,)
-    # Ignore the CLS-to-CLS weight (first element) and get top 5 important bands:
+    # Ignore the CLS-to-CLS weight (first element) and get top 5 important components:
     top5_idx = cls_attn[1:].argsort()[-5:][::-1]
-    print("Top 5 important bands (0-indexed):", top5_idx)
+    print("Top 5 important PCA components (0-indexed):", top5_idx)
+
 # Export the trained model to ONNX format with two outputs
 model_cpu = model.cpu()
-dummy_input = torch.randn(1, 200, dtype=torch.float32)
+dummy_input = torch.randn(1, num_pca_components, dtype=torch.float32)
 onnx_file = "/Users/phani/Desktop/AI/spectra-luma/model/indian_pines_transformer.onnx"
 onnx.export(model_cpu, dummy_input, onnx_file, 
             input_names=["spectral_vector"], 
@@ -214,15 +223,23 @@ onnx.export(model_cpu, dummy_input, onnx_file,
                           "attention_weights": {0: "batch_size"}})
 print(f"Model exported to {onnx_file}")
 
-# Save inference parameters (for restoring normalization and class mapping)
+# Save inference parameters (for restoring normalization, PCA, and class mapping)
 inference_params = {
     'model_state_dict': model.state_dict(),
-    'band_min': band_min.tolist(),
-    'band_max': band_max.tolist(),
-    'CLASS_NAMES': CLASS_NAMES
+    'band_min': band_min.tolist() if band_min is not None else None,
+    'band_max': band_max.tolist() if band_max is not None else None,
+    'CLASS_NAMES': CLASS_NAMES,
+    'pca_components': pca.components_.tolist(),
+    'pca_mean': pca.mean_.tolist()
 }
 torch.save(inference_params, "/Users/phani/Desktop/AI/spectra-luma/model/indian_pines_transformer_inference_params.pth")
-params = {"CLASS_NAMES": CLASS_NAMES, "band_min": band_min.tolist(), "band_max": band_max.tolist()}
+params = {
+    "CLASS_NAMES": CLASS_NAMES, 
+    "band_min": band_min.tolist() if band_min is not None else None, 
+    "band_max": band_max.tolist() if band_max is not None else None,
+    "pca_components": pca.components_.tolist(),
+    "pca_mean": pca.mean_.tolist()
+}
 with open("/Users/phani/Desktop/AI/spectra-luma/model/indian_pines_transformer_inference_params.json", "w") as f:
     json.dump(params, f)
 
