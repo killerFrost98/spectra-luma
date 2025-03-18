@@ -38,17 +38,12 @@
     <p>Enter spectral data as comma-separated values (e.g.,
         <em>2561, 3990, 4379, ...</em>):</p>
     <input id="spectralInput" type="text" placeholder="Enter 200 comma separated spectral values">
-
     <p>Or adjust spectral data interactively below:</p>
     <canvas id="spectralChart"></canvas>
     <br>
     <button id="runInferenceButton">Run Inference</button>
     <h2>Output</h2>
     <pre id="output"></pre>
-
-    <!-- Attention map: displays mapped band importance -->
-    <h2>Attention Map (Mapped to Original Bands)</h2>
-    <canvas id="attentionChart"></canvas>
 
     <script>
         window.addEventListener('load', function () {
@@ -132,7 +127,8 @@
                             data: spectralData,
                             borderColor: 'blue',
                             backgroundColor: 'rgba(0, 0, 255, 0.1)',
-                            pointRadius: 3,
+                            // Initialize with a constant radius for each point.
+                            pointRadius: Array(spectralData.length).fill(3),
                             pointBackgroundColor: 'red'
                         }]
                     },
@@ -146,6 +142,9 @@
                                     spectralChart.data.datasets[datasetIndex].data[index] = value;
                                     document.getElementById("spectralInput").value = spectralData.join(
                                         ", ");
+                                    // Reset point radius back to default when data is manually changed.
+                                    spectralChart.data.datasets[0].pointRadius = Array(spectralData
+                                        .length).fill(3);
                                     spectralChart.update();
                                 }
                             }
@@ -174,14 +173,17 @@
             document.getElementById("spectralInput").addEventListener("input", function () {
                 const inputText = this.value;
                 if (inputText.trim() !== "") {
-                    const parsedData = inputText.split(",").map(x => parseFloat(x.trim())).filter(x =>
-                        !isNaN(x));
+                    const parsedData = inputText.split(",")
+                        .map(x => parseFloat(x.trim()))
+                        .filter(x => !isNaN(x));
                     if (parsedData.length > 0) {
                         spectralData = parsedData;
                         spectralChart.data.labels = Array.from({
                             length: spectralData.length
                         }, (_, i) => i + 1);
                         spectralChart.data.datasets[0].data = spectralData;
+                        // Reset point radius to default.
+                        spectralChart.data.datasets[0].pointRadius = Array(spectralData.length).fill(3);
                         spectralChart.update();
                     }
                 }
@@ -215,8 +217,8 @@
                     outputElem.textContent += "[ERROR] ONNX model session not loaded.\n";
                     return;
                 }
-                if (!inferenceParams || !inferenceParams.band_min || !inferenceParams.band_max || !
-                    inferenceParams.pca_mean || !inferenceParams.pca_components) {
+                if (!inferenceParams || !inferenceParams.band_min || !inferenceParams.band_max ||
+                    !inferenceParams.pca_mean || !inferenceParams.pca_components) {
                     outputElem.textContent += "[ERROR] Inference parameters not loaded or incomplete.\n";
                     return;
                 }
@@ -224,8 +226,9 @@
                 // Read spectral input
                 const spectralInputText = document.getElementById("spectralInput").value;
                 if (spectralInputText.trim() !== "") {
-                    const parsedData = spectralInputText.split(",").map(x => parseFloat(x.trim())).filter(x =>
-                        !isNaN(x));
+                    const parsedData = spectralInputText.split(",")
+                        .map(x => parseFloat(x.trim()))
+                        .filter(x => !isNaN(x));
                     if (parsedData.length !== inferenceParams.pca_mean.length) {
                         outputElem.textContent +=
                             `[ERROR] Expected ${inferenceParams.pca_mean.length} bands but got ${parsedData.length} bands from input.\n`;
@@ -236,7 +239,7 @@
                     outputElem.textContent += "[INFO] No input provided; using default spectral data.\n";
                 }
 
-                // Update spectral chart
+                // Update spectral chart with current data.
                 spectralChart.data.datasets[0].data = spectralData;
                 spectralChart.update();
 
@@ -317,7 +320,15 @@
                                     mappedAttention[j] += clsAttnToComponents[i] * Math.abs(pcaComponents[i][j]);
                                 }
                             }
-                            createAttentionMap(mappedAttention);
+                            // Scale the attention values to use as point radii.
+                            const minAttn = Math.min(...mappedAttention);
+                            const maxAttn = Math.max(...mappedAttention);
+                            // Here the radii will range between 3 and 20.
+                            const scaledRadii = mappedAttention.map(value => 3 + 17 * (value - minAttn) / (
+                                maxAttn - minAttn + 1e-8));
+                            // Update the point radius for each band to reflect its attention value.
+                            spectralChart.data.datasets[0].pointRadius = scaledRadii;
+                            spectralChart.update();
                         }
                     } else {
                         outputElem.textContent += "[INFO] Attention weights not provided by the model.\n";
@@ -325,45 +336,6 @@
                 } catch (err) {
                     outputElem.textContent += "[ERROR] Model inference failed: " + err + "\n";
                 }
-            }
-
-            // Create the attention map chart (mapped to original 200 bands).
-            function createAttentionMap(attentionWeights) {
-                const ctx = document.getElementById('attentionChart').getContext('2d');
-                if (window.attentionChartInstance) {
-                    window.attentionChartInstance.destroy();
-                }
-                window.attentionChartInstance = new Chart(ctx, {
-                    type: 'bar',
-                    data: {
-                        labels: Array.from({
-                            length: attentionWeights.length
-                        }, (_, i) => i + 1),
-                        datasets: [{
-                            label: 'Mapped Attention Weight',
-                            data: attentionWeights,
-                            borderColor: 'green',
-                            backgroundColor: 'rgba(0, 255, 0, 0.1)'
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        scales: {
-                            x: {
-                                title: {
-                                    display: true,
-                                    text: "Original Band (Index)"
-                                }
-                            },
-                            y: {
-                                title: {
-                                    display: true,
-                                    text: "Attention Weight"
-                                }
-                            }
-                        }
-                    }
-                });
             }
 
             document.getElementById("runInferenceButton").addEventListener("click", runInference);
