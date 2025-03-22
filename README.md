@@ -12,3 +12,4 @@
 - [ ] Analyze trends to predict which types of restaurants are most popular in different areas.
 - [ ] Visualize model arch.
 - [ ] Add gaussian noice
+- [ ] Spatial indexes
