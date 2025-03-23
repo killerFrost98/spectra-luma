@@ -13,3 +13,4 @@
 - [ ] Visualize model arch.
 - [ ] Add gaussian noice
 - [ ] Spatial indexes
+- [ ] Make yolo like model for object separation
