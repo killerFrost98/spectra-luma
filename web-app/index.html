@@ -66,36 +66,35 @@
         // Store your diagram in a JS multiline string (template literal)
         const mermaidCode =
             `
-            graph TD
-            %% Step 1: Unified Data Ingestion
-            A1[Hyperspectral Satellites] -->|Multi-Band Image Tiles| B1[Kafka: Raw Stream + Broker]
-            A2[UAVs / Drones] -->|Real-Time Streaming| B1
-            A3[Ground Sensors] -->|Time-Series Spectral Data| B1
+                graph TD
+                %% Step 1: Unified Data Ingestion
+                A1[Hyperspectral Satellites] -->|Multi-Band Image Tiles| B1[Kafka: Raw Stream + Broker]
+                A2[UAVs / Drones] -->|Real-Time Streaming| B1
+                A3[Ground Sensors] -->|Time-Series Spectral Data| B1
 
-            %% Step 2: Storage & Processing
-            B1 -->|Persistent Storage| D1[S3 Data Lake: Lifecycle to Glacier]
-            B1 -->|Real-Time Processing| E1[Apache Flink / Spark Streaming]
+                %% Step 2: Storage & Processing
+                B1 -->|Persistent Storage| D1[S3 Data Lake]
+                D1 -->|Lifecycle to Glacier| D2[Glacier]
+                B1 -->|Real-Time Processing| E1[Apache Flink / Spark Streaming]
 
-            %% Step 3: Preprocessing Pipeline: Sequential
-            E1 -->|Atmospheric Correction: 6S Model| F1
-            F1 -->|Noise Reduction: PCA / Fourier| G1
-            G1 -->|Georeferencing & Indexing| H1[PostGIS / Raster Indexing]
-            H1 --> I1[Feature Fusion]
+                %% Step 3: Preprocessing Pipeline: Sequential
+                E1 -->|Atmospheric Correction| F1[6SV1 Model]
+                F1 -->|Noise Reduction| G1[PCA / Fourier]
+                G1 -->|Georeferencing| H1[Geospatial Tagging / Indexing]
 
-            %% Step 4: Spectral & Anomaly Analysis
-            I1 -->|Latent Feature Embedding| J1[Unified Autoencoder Model]
-            J1 -->|Spectral Classification| K1[Spectral Transformer Classifier]
-            J1 -->|Anomaly Detection| M1[Anomaly Detector: Autoencoder + RNN]
+                %% Step 4: Spectral & Anomaly Analysis
+                H1 -->|Feature Extraction| K1[Spectral Transformer Classifier]
+                H1 -->|Anomaly Detection| M1[Anomaly Detector: Autoencoder + Classifier]
 
-            %% Classification Output
-            K1 -->|Class Labels| N1[Classified Raster]
-            N1 -->|Store Output + Metadata| O1[PostGIS / Elasticsearch]
-            N1 -->|Forecasting + Change Detection| Q1[ARIMA / LSTM + Comparative Analysis]
-            Q1 -->|Geospatial Insights| S1[Heatmaps / Trends / Visuals]
+                %% Classification Output
+                K1 -->|Class Labels| N1[Classified Raster]
+                N1 -->|Store Output + Metadata| O1[PostGIS / Elasticsearch]
+                N1 -->|Change Detection| Q1[ARIMA, LSTM etc]
+                Q1 -->|Geospatial Insights| S1[Heatmaps / Trends / Visuals]
 
-            %% Anomaly Output
-            M1 -->|Alerting & Notification| P1[Alerts: Email / Webhook / Dashboard]
-        `;
+                %% Anomaly Output
+                M1 -->|Alerting & Notification| P1[Alerts: Email / Webhook / Dashboard]
+            `;
 
         // Insert the diagram code into the target <div>
         const container = document.getElementById('mermaidContainer');
