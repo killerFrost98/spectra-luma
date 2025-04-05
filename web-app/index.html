@@ -137,8 +137,8 @@
                     SEC -->|Atmospheric Correction| F1[Atmospheric Correction like 6SV1]
                     F1 -->|Noise Reduction| G1[Noise Reduction using PCA, Fourier]
                     G1 -->|Save to Database| PG1[PostGIS:<br>Spatial index on Location, and B tree index on Timestamp]
-                    PG1 -->|Consume WAL for Anomaly Detection| M1[Anomaly Detection Service]
-                    M1 -->|Alerting| P1[Alert Notification Service]
+                    PG1 -->|Consume WAL for Anomaly Detection| M1[Anomaly Detection]
+                    M1 -->|Alerting| P1[Alert Notification]
                 end
             `;
 
