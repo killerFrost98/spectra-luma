@@ -13,16 +13,21 @@
         body {
             font-family: Arial, sans-serif;
             margin: 20px;
+            background-color: #121212;
+            color: #e0e0e0;
         }
 
         canvas {
             max-width: 100%;
             height: 300px;
+            /* Optionally, set a dark background for the canvas */
+            background-color: #1e1e1e;
         }
 
         pre {
-            background: #f4f4f4;
+            background: #333;
             padding: 10px;
+            color: #e0e0e0;
         }
 
         input[type="text"] {
@@ -30,18 +35,35 @@
             padding: 8px;
             margin: 10px 0;
             box-sizing: border-box;
+            background-color: #333;
+            color: #e0e0e0;
+            border: 1px solid #555;
         }
 
         .mermaid {
             margin-top: 20px;
-            background: #f9f9f9;
+            background: #1e1e1e;
             padding: 10px;
-            border: 1px solid #ddd;
+            border: 1px solid #555;
+            color: #e0e0e0;
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: #333;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #444;
         }
     </style>
     <script>
         mermaid.initialize({
-            startOnLoad: true
+            startOnLoad: true,
+            theme: 'dark'
         });
     </script>
 </head>
@@ -66,34 +88,58 @@
         // Store your diagram in a JS multiline string (template literal)
         const mermaidCode =
             `
-                graph TD
-                %% Step 1: Unified Data Ingestion
-                A1[Hyperspectral Satellites] -->|Multi-Band Image Tiles| B1[Kafka: Raw Stream + Broker]
-                A2[UAVs / Drones] -->|Real-Time Streaming| B1
-                A3[Ground Sensors] -->|Time-Series Spectral Data| B1
+                flowchart TD
+                %% Example for workflow orchestration
+                subgraph Crop_Deficiency_Detection [Ex: Deficiency Detection]
+                    CR[User Request] --> AF[Trigger Airflow]
+                    AF --> CC[Identify Crop Area]
+                    CC --> CT[Classify Crop Type]
+                    CT --> AH[Assess Crop Health by Type]
+                    AH --> ND[Predict Nutrient Deficiency]
+                    ND -- Summary --> LL[Analysis with Actionable items like recommended Fertilizers]
+                end
 
-                %% Step 2: Storage & Processing
-                B1 -->|Persistent Storage| D1[S3 Data Lake]
-                D1 -->|Lifecycle to Glacier| D2[Glacier]
-                B1 -->|Real-Time Processing| E1[Apache Flink / Spark Streaming]
+                %% Airflow Workflow Subgraph with N Stages Loop, Checkpoints, and Retry Logic
+                subgraph Airflow_Workflow [Workflow orchestration]
+                    U[User Request:<br>Area, Time Range, Analysis Type] -->|Trigger| A[Apache Airflow]
+                    A --> IL[Ingestion Data from PostGIS]
+                    IL --> L[Loop: N Stages]
+                    
+                    %% Define a generic stage loop with checkpoint and retry logic
+                    L --> S[Stage i: Task Execution]
+                    S --> CP[Checkpoint:<br>Save to AWS S3 / HDFS]
+                    CP --> D{Stage Successful?}
+                    D -- Yes --> N[Next Stage?]
+                    D -- No --> Rtry[Retry from Checkpoint]
+                    Rtry --> S
+                    
+                    %% Decision: if more stages remain, loop; if final stage, complete workflow
+                    N -- More Stages --> L
+                    N -- Summarize --> LLM[Summarize important action points using LLM]
+                    LLM -- Notify User --> R[Save in DB]
+                end
 
-                %% Step 3: Preprocessing Pipeline: Sequential
-                E1 -->|Atmospheric Correction| F1[6SV1 Model]
-                F1 -->|Noise Reduction| G1[PCA / Fourier]
-                G1 -->|Georeferencing| H1[Geospatial Tagging / Indexing]
+                %% Data Ingestion & Processing Subgraph with Multiple Satellite Inputs
+                subgraph Data_Ingestion_and_Processing [Data Ingestion & Processing]
+                    %% Satellite Sources
+                    Sat1[Hyperspectral Satellite]
+                    Sat2[Multispectral Satellite]
+                    Sat3[Thermal Satellite]
+                    
+                    %% Ingestion from multiple satellites feeding into Kafka
+                    Sat1 -->|Multi-Band Image Tiles| B1[Kafka Streaming]
+                    Sat2 -->|Multi-Band Image Tiles| B1
+                    Sat3 -->|Multi-Band Image Tiles| B1
 
-                %% Step 4: Spectral & Anomaly Analysis
-                H1 -->|Feature Extraction| K1[Spectral Transformer Classifier]
-                H1 -->|Anomaly Detection| M1[Anomaly Detector: Autoencoder + Classifier]
-
-                %% Classification Output
-                K1 -->|Class Labels| N1[Classified Raster]
-                N1 -->|Store Output + Metadata| O1[PostGIS / Elasticsearch]
-                N1 -->|Change Detection| Q1[ARIMA, LSTM etc]
-                Q1 -->|Geospatial Insights| S1[Heatmaps / Trends / Visuals]
-
-                %% Anomaly Output
-                M1 -->|Alerting & Notification| P1[Alerts: Email / Webhook / Dashboard]
+                    B1 -->|Persistent Storage| D1[Data Lake: AWS S3]
+                    D1 -->|Lifecycle to Glacier| D2[Archival: AWS Glacier]
+                    B1 -->|Real-Time Processing| SEC[Satellite Error Calibration]
+                    SEC -->|Atmospheric Correction| F1[Atmospheric Correction like 6SV1]
+                    F1 -->|Noise Reduction| G1[Noise Reduction using PCA, Fourier]
+                    G1 -->|Save to Database| PG1[PostGIS:<br>Spatial index on Location, and B tree index on Timestamp]
+                    PG1 -->|Consume WAL for Anomaly Detection| M1[Anomaly Detection Service]
+                    M1 -->|Alerting| P1[Alert Notification Service]
+                end
             `;
 
         // Insert the diagram code into the target <div>
