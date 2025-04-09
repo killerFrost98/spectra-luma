@@ -14,3 +14,5 @@
 - [ ] Add gaussian noice
 - [ ] Spatial indexes
 - [ ] Make yolo like model for object separation
+- [ ] Use NDVI to first select vegetation part then do classification: (NIR - Red) / (NIR + Red).
+- [ ] When crop degradation is identified, use GenAI to suggest related neutrition/pesticides to combact.
