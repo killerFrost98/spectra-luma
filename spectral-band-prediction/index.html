@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Satellite Band Selector</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <style>
+        :root {
+            --bg: #121212;
+            --fg: #e0e0e0;
+            --panel: #1e1e1e;
+            --accent: #4caf50;
+            --border: #555;
+        }
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+        }
+
+        main {
+            padding: 24px;
+            max-width: 840px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.8rem;
+        }
+
+        section {
+            background: var(--panel);
+            padding: 16px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, .2);
+        }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: .9rem;
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 6px;
+            background: var(--border);
+            border-radius: 3px;
+            outline: none;
+            transition: background 0.15s ease-out;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            background: var(--accent);
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: var(--panel);
+            color: var(--fg);
+            border: 1px solid var(--border);
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #2b2b2b;
+        }
+
+        pre {
+            background: var(--panel);
+            padding: 16px;
+            overflow-x: auto;
+        }
+
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .slider-label {
+            min-width: 180px;
+            font-variant-numeric: tabular-nums;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .slider-value {
+            width: 32px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        small.scale-legend {
+            display: block;
+            margin-top: 6px;
+            font-size: .8rem;
+            color: #b0b0b0;
+        }
+
+        .info {
+            font-style: normal;
+            cursor: help;
+            color: var(--accent);
+            user-select: none;
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <header>
+            <h1>Satellite Band Selector</h1>
+            <p>In satellite communication, higher-frequency bands (Ku, K, Ka, V) provide larger bandwidth and therefore higher
+                data rates, while lower-frequency bands (UHF, L, S) are less susceptible to atmospheric attenuation but offer
+                lower throughput. Use this tool to strike the right balance based on current conditions.</p>
+            <p>Adjust weather severity and per-band congestion using the sliders below, then click
+                <em>Predict</em>.</p>
+        </header>
+
+        <!-- Weather slider -->
+        <section id="weatherSection">
+            <label for="weatherInput">Weather Severity:
+                <span id="weatherValue">0</span>
+            </label>
+            <input id="weatherInput" type="range" min="0" max="100" value="0" step="1" />
+            <small class="scale-legend">0 = clear skies &nbsp;•&nbsp; 100 = tropical downpour</small>
+        </section>
+
+        <!-- Congestion sliders -->
+        <section id="congestionSection">
+            <h2 style="margin-top:0;">Band Congestion</h2>
+            <div id="slidersContainer"></div>
+        </section>
+
+        <section style="text-align:center;">
+            <button id="predictButton">Predict Best Band</button>
+        </section>
+
+        <section>
+            <h2 style="margin-top:0;">Prediction Output</h2>
+            <pre id="output">Model not loaded yet...</pre>
+        </section>
+    </main>
+
+    <script>
+        // ------------------------ CONFIG --------------------------
+        const bands = ["UHF", "L", "S", "C", "X", "Ku", "K", "Ka", "V"];
+        const freqRanges = [
+            "0.3–3 GHz", // UHF
+            "1–2 GHz", // L
+            "2–4 GHz", // S
+            "4–8 GHz", // C
+            "8–12 GHz", // X
+            "12–18 GHz", // Ku
+            "18–26.5 GHz", // K
+            "26.5–40 GHz", // Ka
+            "40–75 GHz" // V
+        ];
+
+        const bandTooltips = [
+            "UHF: Robust through foliage & heavy rain; low data rate.",
+            "L-band: GPS, mobile sat; good rain resilience; modest throughput.",
+            "S-band: Telemetry, IoT; decent rain fade resistance.",
+            "C-band: TV distribution; excellent rain fade resistance.",
+            "X-band: Military, radar; balanced bandwidth & weather tolerance.",
+            "Ku-band: VSAT, broadcast; high data rate; susceptible to heavy rain.",
+            "K-band: Experimental broadband; higher rain attenuation.",
+            "Ka-band: High-throughput broadband; strong rain fade.",
+            "V-band: Future ultra-high-capacity; extreme rain fade risk."
+        ];
+
+        let ortSession;
+
+        // ------------------------ UI BUILD ------------------------
+        const weatherEl = document.getElementById("weatherInput");
+        const weatherVal = document.getElementById("weatherValue");
+        weatherEl.addEventListener("input", () => {
+            weatherVal.textContent = weatherEl.value;
+            updateSliderColor(weatherEl);
+        });
+
+        const container = document.getElementById("slidersContainer");
+        const bandSliders = [];
+
+        function getColor(val) {
+            if (val < 34) return "#4caf50"; // green
+            if (val < 67) return "#ffeb3b"; // yellow
+            return "#f44336"; // red
+        }
+
+        function updateSliderColor(slider) {
+            const val = slider.valueAsNumber;
+            const col = getColor(val);
+            slider.style.background =
+                `linear-gradient(to right, ${col} 0%, ${col} ${val}%, var(--border) ${val}%, var(--border) 100%)`;
+        }
+
+        bands.forEach((band, i) => {
+            const row = document.createElement("div");
+            row.className = "slider-row";
+            row.innerHTML =
+                `
+                <span class="slider-label">${band} → ${freqRanges[i]} <span class="info" title="${bandTooltips[i]}">ⓘ</span></span>
+                <input type="range" min="0" max="100" value="0" step="1" id="bandSlider${i}">
+                <span class="slider-value" id="bandVal${i}">0</span>`;
+            container.appendChild(row);
+            const slider = row.querySelector("input");
+            const val = row.querySelector(".slider-value");
+            slider.addEventListener("input", () => {
+                val.textContent = slider.value;
+                updateSliderColor(slider);
+            });
+            bandSliders.push(slider);
+        });
+
+        // ------------------- RANDOMIZE INPUTS ---------------------
+        function randomizeInputs() {
+            // Random value for weather
+            const w = Math.floor(Math.random() * 101);
+            weatherEl.value = w;
+            weatherVal.textContent = w;
+            updateSliderColor(weatherEl);
+            // Random value for each band slider
+            bandSliders.forEach((slider, idx) => {
+                const v = Math.floor(Math.random() * 101);
+                slider.value = v;
+                document.getElementById(`bandVal${idx}`).textContent = v;
+                updateSliderColor(slider);
+            });
+        }
+        randomizeInputs();
+
+        // ------------------------ MODEL ---------------------------
+        async function loadModel() {
+            try {
+                const url = "http://localhost:8000/model/suitable_band_prediction.onnx"; // adjust if needed
+                ortSession = await ort.InferenceSession.create(url);
+                document.getElementById("output").textContent = "[SUCCESS] Model loaded.";
+            } catch (err) {
+                document.getElementById("output").textContent = "[ERROR] Failed to load model.\n" + err;
+            }
+        }
+
+        // ---------------------- PREDICTION ------------------------
+        async function predict() {
+            if (!ortSession) return;
+            const weather = parseFloat(weatherEl.value);
+            const interference = bandSliders.map((s) => parseFloat(s.value));
+            const tensor = new ort.Tensor("float32", new Float32Array([weather, ...interference]), [1, 10]);
+            const feeds = {
+                input: tensor
+            };
+            const outputMap = await ortSession.run(feeds);
+            const logits = outputMap.output.data;
+            const bestIdx = logits.indexOf(Math.max(...logits));
+            const bestBand = bands[bestIdx];
+            document.getElementById("output").textContent =
+                `Recommended Band: ${bestBand}\n\nReasoning:\n${explain(weather, interference, bestIdx)}`;
+        }
+
+        function explain(weather, interference, bestIdx) {
+            const parts = [];
+            if (weather > 80) parts.push("Severe weather detected — higher-frequency bands avoided.");
+            else if (weather > 60) parts.push("Heavy rain — Ku and above attenuated.");
+            else if (weather > 40) parts.push("Moderate rain — K and above attenuated.");
+            else if (weather > 20) parts.push("Light rain — Ka and V attenuated.");
+            else parts.push("Clear weather — all bands available.");
+            const minInt = Math.min(...interference);
+            if (interference[bestIdx] === minInt) parts.push("Chosen band has the least congestion.");
+            else parts.push("Band balances congestion with weather resilience.");
+            return parts.join(" ");
+        }
+
+        document.getElementById("predictButton").addEventListener("click", predict);
+        loadModel();
+    </script>
+</body>
+
+</html>
