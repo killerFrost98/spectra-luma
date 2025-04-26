@@ -123,6 +123,14 @@
             color: var(--accent);
             user-select: none;
         }
+
+        /* Additional styling for Future Scope list */
+
+        ul.future-scope {
+            margin: 8px 0 0 20px;
+            padding: 0;
+            list-style-type: disc;
+        }
     </style>
 </head>
 
@@ -130,11 +138,27 @@
     <main>
         <header>
             <h1>Satellite Band Selector</h1>
-            <p>In satellite communication, higher-frequency bands (Ku, K, Ka, V) provide larger bandwidth and therefore higher
-                data rates, while lower-frequency bands (UHF, L, S) are less susceptible to atmospheric attenuation but offer
-                lower throughput. Use this tool to strike the right balance based on current conditions.</p>
-            <p>Adjust weather severity and per-band congestion using the sliders below, then click
-                <em>Predict</em>.</p>
+            <p>
+                In satellite communication, higher‑frequency bands (Ku, K, Ka, V) provide larger bandwidth and therefore higher data rates,
+                while lower‑frequency bands (UHF, L, S) are less susceptible to atmospheric attenuation but offer lower throughput.
+                Use this tool to strike the right balance based on current conditions.
+            </p>
+            <p>
+                Adjust weather severity and per‑band congestion using the sliders below, then click
+                <em>Predict</em>.
+            </p>
+
+            <!-- ──────────────── FUTURE SCOPE ──────────────── -->
+            <p>
+                <strong>Future Scope</strong>
+            </p>
+            <ul class="future-scope">
+                <li>Select available bands according to satellite and regulatory constraints</li>
+                <li>Geographical coverage considerations</li>
+                <li>Power left in satellite</li>
+                <li>Data left to transfer</li>
+            </ul>
+            <!-- ─────────────────────────────────────────────── -->
         </header>
 
         <!-- Weather slider -->
@@ -253,7 +277,8 @@
         // ------------------------ MODEL ---------------------------
         async function loadModel() {
             try {
-                const url = "http://localhost:8000/model/suitable_band_prediction.onnx"; // adjust if needed
+                // const url = "../model/suitable_band_prediction.onnx";
+                const url = "http://localhost:8000/model/suitable_band_prediction.onnx";
                 ortSession = await ort.InferenceSession.create(url);
                 document.getElementById("output").textContent = "[SUCCESS] Model loaded.";
             } catch (err) {
